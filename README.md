@@ -16,6 +16,7 @@ pwsh -File .\Export-VcMeta.ps1 -Server <來源vC> -User administrator@vsphere.lo
 
 參數：
 - `-Datacenter`：只匯出指定 Datacenter（可多個）
+- `-Folder 'Linux','MGMT/Prod'`：**只搬指定 VM 資料夾(含子樹)**與裡面的 VM；連帶只帶出這些物件用到的 tag/屬性定義（`-AllDefinitions` 可全帶）
 - `-Include`：`Folders,VMPlacement,Tags,CustomAttributes,Notes`（預設全要；用 `-Command` 呼叫才能傳多值）
 
 產出 CSV（UTF-8 with BOM，Excel 可直接開、可手動編修後再匯入）：
@@ -49,6 +50,7 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <目標vC> -User administrator@vsph
 參數：
 - `-DatacenterMap 'DC-A=DC-B'`：兩邊 Datacenter 名稱不同時做對應（可多組）
 - `-Include`：只做某幾類（預設 `Folders,Tags,CustomAttributes,Notes`，**不含**搬 VM）
+- `-Folder 'Linux'`：同上，**用整台 vC 的匯出檔也能只匯入某個資料夾**；範圍外的 VM Notes / 指派會被濾掉
 - `-MoveVMs`：把 VM/範本 `Move-VM`/`Move-Template` 到對應資料夾（僅改 inventory 位置，不動儲存/運算）
 - `-ReportPath`：明細報告位置（預設寫在 `-InDir` 下 `import-report-<時間>.csv`）
 
@@ -104,6 +106,30 @@ pwsh -Command "& .\Test-VcMeta.ps1 -SourceServer <來源vC> -SourcePassword '<pw
 
 - 只會動 `-Prefix`（預設 `zz-migtest`）開頭的物件，以及 `-NotesTestVM` 那台 VM 的 Notes（測完清空）
 - `-KeepTestObjects`：保留測試物件不清，方便到 UI 上看
-- 15 項檢查：匯出 4、DryRun 2、匯入 2、目標端獨立驗證 5、清除複驗 2
+- 21 項檢查：匯出 4、**範圍匯出 4**、DryRun 2、**範圍匯入 2**、匯入 2、目標端獨立驗證 5、清除複驗 2
 
-實測結果（2026-09-02，vCenter 8.0.3 → 9.1）：**15/15 ALL PASS**。
+實測結果（2026-09-02，vCenter 8.0.3 → 9.1）：**21/21 ALL PASS**。
+
+## 7. 以資料夾為單位搬（by folder）
+
+只搬某個資料夾子樹、連同裡面 VM 的 tag / 自訂屬性 / Notes：
+
+```bash
+pwsh -Command "& .\Export-VcMeta.ps1 -Server <來源vC> -User administrator@vsphere.local -Password '<pw>' -OutDir .\export-linux -Folder 'Linux'"
+```
+
+```bash
+pwsh -Command "& .\Import-VcMeta.ps1 -Server <目標vC> -User administrator@vsphere.local -Password '<pw>' -InDir .\export-linux -DatacenterMap '<來源DC>=<目標DC>' -Include Folders,VMPlacement,Tags,CustomAttributes,Notes -MoveVMs -DryRun"
+```
+
+範圍規則：
+
+| 項目 | `-Folder` 下的行為 |
+|---|---|
+| 資料夾 | 指定路徑本身 + 所有子資料夾（VM 類型） |
+| VM / 範本 | 只有這棵子樹裡的 |
+| Notes | 只有範圍內 VM 的 |
+| Tag 指派 / 屬性值 | 只有範圍內的**資料夾**與 **VM**；host / datastore / cluster 等一律不帶 |
+| Tag 分類、標籤、屬性定義 | 只帶「範圍內物件真的用到」的那些（`-AllDefinitions` 可全帶） |
+
+`-Folder` 兩邊都能用：匯出時縮範圍，或者已經有整台 vC 的匯出檔、匯入時才縮範圍（分批一個資料夾一個資料夾搬時很好用）。

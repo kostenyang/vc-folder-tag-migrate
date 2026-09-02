@@ -13,6 +13,8 @@ param(
     [pscredential]$Credential,
     [string]$OutDir = "./vc-meta-export",
     [string[]]$Datacenter,
+    [string[]]$Folder,                 # 只匯出這些 VM 資料夾(含子樹)與裡面的 VM，例：-Folder 'Linux','MGMT/Prod'
+    [switch]$AllDefinitions,           # 搭配 -Folder：連沒用到的 tag/屬性定義也一起匯出
     [ValidateSet('Folders','VMPlacement','Tags','CustomAttributes','Notes')]
     [string[]]$Include = @('Folders','VMPlacement','Tags','CustomAttributes','Notes')
 )
@@ -88,12 +90,30 @@ foreach ($f in $folderViews) {
     }
 }
 
+# --- 資料夾範圍（-Folder）---
+# $scopeFolderIds / $scopeVmIds 為 $null 代表「不限範圍、整台 vC」
+$scopeFolderIds = $null
+$scopeVmIds     = $null
+if ($Folder) {
+    $scopeFolderIds = @{}
+    foreach ($kv in $folderInfo.GetEnumerator()) {
+        if ($kv.Value.type -ne 'VM' -or [string]::IsNullOrEmpty($kv.Value.path)) { continue }
+        foreach ($f in $Folder) {
+            $fn = $f.Trim('/')
+            if ($kv.Value.path -eq $fn -or $kv.Value.path -like "$fn/*") { $scopeFolderIds[$kv.Key] = $true; break }
+        }
+    }
+    if ($scopeFolderIds.Count -eq 0) { throw "找不到符合的 VM 資料夾：$($Folder -join ', ')" }
+    Write-Host "[*] 範圍限定：$($Folder -join ', ')  → $($scopeFolderIds.Count) 個資料夾(含子樹)"
+}
+
 Write-Host "[*] 匯出中 ..."
 
 # --- 1. Folders ---
 if ($Include -contains 'Folders') {
     $rows = foreach ($kv in $folderInfo.GetEnumerator()) {
         if ([string]::IsNullOrEmpty($kv.Value.path)) { continue }   # root folder 不匯出
+        if ($scopeFolderIds -and -not $scopeFolderIds.ContainsKey($kv.Key)) { continue }
         [pscustomobject]@{
             Datacenter = $kv.Value.dc
             FolderType = $kv.Value.type
@@ -108,7 +128,8 @@ if ($Include -contains 'Folders') {
 }
 
 # --- 2. VM 位置 + 5. Notes ---
-if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes')) {
+if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Folder) {
+    if ($Folder) { $scopeVmIds = @{} }
     $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template -Server $vc
     $place = New-Object System.Collections.ArrayList
     $notes = New-Object System.Collections.ArrayList
@@ -117,6 +138,10 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes')) {
         $info = if ($parentId -and $folderInfo.ContainsKey($parentId)) { $folderInfo[$parentId] } else { $null }
         $dcName = if ($info) { $info.dc } else { '' }
         if ($Datacenter -and $dcName -and ($Datacenter -notcontains $dcName)) { continue }
+        if ($scopeFolderIds) {
+            if (-not ($parentId -and $scopeFolderIds.ContainsKey($parentId))) { continue }
+            $scopeVmIds[$vm.MoRef.ToString()] = $true
+        }
         [void]$place.Add([pscustomobject]@{
             Datacenter   = $dcName
             VMName       = $vm.Name
@@ -149,19 +174,8 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes')) {
 # --- 3. Tags ---
 if ($Include -contains 'Tags') {
     $cats = Get-TagCategory -Server $vc
-    Write-Meta ($cats | ForEach-Object {
-        [pscustomobject]@{
-            Name        = $_.Name
-            Description = $_.Description
-            Cardinality = $_.Cardinality
-            EntityType  = ($_.EntityType -join ';')
-        }
-    } | Sort-Object Name) (Join-Path $OutDir 'tag-categories.csv') @('Name','Description','Cardinality','EntityType')
-
     $tags = Get-Tag -Server $vc
-    Write-Meta ($tags | ForEach-Object {
-        [pscustomobject]@{ Category = $_.Category.Name; Name = $_.Name; Description = $_.Description }
-    } | Sort-Object Category,Name) (Join-Path $OutDir 'tags.csv') @('Category','Name','Description')
+    # 定義在指派算完之後才寫，這樣 -Folder 範圍下可以只留用得到的分類/標籤
 
     # 逐類型收集實體再查 tag 指派：直接 Get-TagAssignment 會被「無法存取的 datastore」等物件中斷
     $targets = New-Object System.Collections.ArrayList
@@ -194,6 +208,7 @@ if ($Include -contains 'Tags') {
         try { $moref = $e.ExtensionData.MoRef; $etype = $moref.Type } catch { }
         if (-not $etype) { $etype = ($e.GetType().Name -replace 'Impl$','') }
         $id = if ($moref) { $moref.ToString() } else { '' }
+        if ($scopeFolderIds -and -not ($scopeFolderIds.ContainsKey($id) -or $scopeVmIds.ContainsKey($id))) { continue }
         $fi = if ($id -and $folderInfo.ContainsKey($id)) { $folderInfo[$id] } else { $null }
         $uuid = ''
         if ($etype -eq 'VirtualMachine') { try { $uuid = $e.ExtensionData.Config.InstanceUuid } catch { } }
@@ -209,6 +224,25 @@ if ($Include -contains 'Tags') {
             MoRef      = $id
         })
     }
+    # -Folder 範圍下預設只留「有被指派到」的分類與標籤（-AllDefinitions 可全留）
+    $usedTag = @{}; $usedCat = @{}
+    foreach ($r in $arows) { $usedTag["$($r.Category)|$($r.Tag)"] = $true; $usedCat[$r.Category] = $true }
+    $catRows = $cats | Where-Object { -not $scopeFolderIds -or $AllDefinitions -or $usedCat.ContainsKey($_.Name) }
+    $tagRows = $tags | Where-Object { -not $scopeFolderIds -or $AllDefinitions -or $usedTag.ContainsKey("$($_.Category.Name)|$($_.Name)") }
+
+    Write-Meta ($catRows | ForEach-Object {
+        [pscustomobject]@{
+            Name        = $_.Name
+            Description = $_.Description
+            Cardinality = $_.Cardinality
+            EntityType  = ($_.EntityType -join ';')
+        }
+    } | Sort-Object Name) (Join-Path $OutDir 'tag-categories.csv') @('Name','Description','Cardinality','EntityType')
+
+    Write-Meta ($tagRows | ForEach-Object {
+        [pscustomobject]@{ Category = $_.Category.Name; Name = $_.Name; Description = $_.Description }
+    } | Sort-Object Category,Name) (Join-Path $OutDir 'tags.csv') @('Category','Name','Description')
+
     Write-Meta ($arows | Sort-Object EntityType,EntityName,Category,Tag) (Join-Path $OutDir 'tag-assignments.csv') @('EntityType','EntityName','EntityUuid','Datacenter','FolderType','EntityPath','Category','Tag','MoRef')
 }
 
@@ -224,8 +258,6 @@ if ($Include -contains 'CustomAttributes') {
             Key        = $f.Key
         }
     }
-    Write-Meta ($defs | Sort-Object TargetType,Name) (Join-Path $OutDir 'custom-attributes.csv') @('Name','TargetType','Key')
-
     $types = 'VirtualMachine','HostSystem','Datastore','ClusterComputeResource','Datacenter','Folder','ResourcePool','StoragePod','DistributedVirtualPortgroup'
     $vrows = New-Object System.Collections.ArrayList
     foreach ($t in $types) {
@@ -240,6 +272,7 @@ if ($Include -contains 'CustomAttributes') {
         foreach ($v in $views) {
             if (-not $v.CustomValue) { continue }
             $id = $v.MoRef.ToString()
+            if ($scopeFolderIds -and -not ($scopeFolderIds.ContainsKey($id) -or $scopeVmIds.ContainsKey($id))) { continue }
             $fi = if ($folderInfo.ContainsKey($id)) { $folderInfo[$id] } else { $null }
             $uuid = if ($uuidMap.ContainsKey($id)) { $uuidMap[$id] } else { '' }
             foreach ($cv in $v.CustomValue) {
@@ -258,6 +291,12 @@ if ($Include -contains 'CustomAttributes') {
             }
         }
     }
+    # 同樣地，-Folder 範圍下預設只留有用到的屬性定義
+    $usedAttr = @{}
+    foreach ($r in $vrows) { $usedAttr[$r.AttributeName] = $true }
+    $defRows = $defs | Where-Object { -not $scopeFolderIds -or $AllDefinitions -or $usedAttr.ContainsKey($_.Name) }
+    Write-Meta ($defRows | Sort-Object TargetType,Name) (Join-Path $OutDir 'custom-attributes.csv') @('Name','TargetType','Key')
+
     Write-Meta ($vrows | Sort-Object EntityType,EntityName,AttributeName) (Join-Path $OutDir 'custom-attribute-values.csv') @('EntityType','EntityName','EntityUuid','Datacenter','FolderType','EntityPath','AttributeName','Value','MoRef')
 }
 

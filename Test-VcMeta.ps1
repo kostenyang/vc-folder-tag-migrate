@@ -98,6 +98,29 @@ if ($NotesTestVM) {
     Write-Host "  手動加一列 Notes -> $NotesTestVM（UUID 留空，測名稱 fallback）"
 }
 
+# ============ 2b. 只匯出這個資料夾（-Folder 範圍）============
+Write-Host "`n=== [2b] 依資料夾範圍匯出 (-Folder $folderTop) ==="
+$scopeDir = "$WorkDir-scope"
+if (Test-Path $scopeDir) { Remove-Item $scopeDir -Recurse -Force }
+& "$here\Export-VcMeta.ps1" -Server $SourceServer -User $SourceUser -Password $SourcePassword -OutDir $scopeDir -Folder $folderTop | Out-Null
+$sFolders = @(Import-Csv "$scopeDir\folders.csv")
+$sTags    = @(Import-Csv "$scopeDir\tags.csv")
+$sCats    = @(Import-Csv "$scopeDir\tag-categories.csv")
+$sAttrs   = @(Import-Csv "$scopeDir\custom-attributes.csv")
+$sAssign  = @(Import-Csv "$scopeDir\tag-assignments.csv")
+$sNotes   = @(Import-Csv "$scopeDir\notes.csv")
+Check '範圍匯出: 只有這棵子樹的資料夾' `
+    (($sFolders.Count -eq 2) -and (@($sFolders | Where-Object { $_.Path -notlike "$folderTop*" }).Count -eq 0)) `
+    ("$($sFolders.Count) 筆: " + (($sFolders.Path) -join ', '))
+Check '範圍匯出: 只帶到有用到的分類/標籤' `
+    (($sCats.Count -eq 1) -and ($sTags.Count -eq 1) -and ($sTags[0].Name -eq $tagName)) `
+    ("分類 $($sCats.Count) / 標籤 $($sTags.Count)")
+Check '範圍匯出: 只帶到有用到的屬性定義' `
+    (($sAttrs.Count -eq 1) -and ($sAttrs[0].Name -eq $caName)) ("$($sAttrs.Count) 筆")
+Check '範圍匯出: 指派/Notes 不含範圍外物件' `
+    ((@($sAssign | Where-Object { $_.EntityPath -notlike "$folderTop*" }).Count -eq 0) -and ($sNotes.Count -eq 0)) `
+    ("指派 $($sAssign.Count) / notes $($sNotes.Count)")
+
 # ============ 3. DryRun ============
 Write-Host "`n=== [3/6] DryRun 匯入 $TargetServer ==="
 $dryReport = "$WorkDir\dryrun.csv"
@@ -108,6 +131,25 @@ $dry = Import-Csv $dryReport
 $wouldFolders = @($dry | Where-Object { $_.Action -eq 'WouldCreate' -and $_.Section -eq 'Folder' -and $_.Target -like "*$folderTop*" })
 Check 'DryRun: 父/子資料夾各列一次' ($wouldFolders.Count -eq 2) (($wouldFolders.Target | ForEach-Object { ($_ -split '\|')[-1] }) -join ', ')
 Check 'DryRun: 不會誤動既有物件'    (@($dry | Where-Object { $_.Action -in 'Created','Set','Assigned' }).Count -eq 0) '無實際寫入'
+
+# ============ 3b. 匯入端的資料夾範圍過濾 ============
+# 用「整台 vC 的完整匯出」但加 -Folder，應該只會動到這棵子樹；
+# 手動加的那筆 Notes 指向範圍外的 VM，必須被濾掉。
+Write-Host "`n=== [3b] DryRun + -Folder（匯入端過濾） ==="
+$dryScope = "$WorkDir\dryrun-scope.csv"
+& "$here\Import-VcMeta.ps1" -Server $TargetServer -User $TargetUser -Password $TargetPassword -InDir $WorkDir `
+    -DatacenterMap "$SourceDatacenter=$TargetDatacenter" -Include Folders,Tags,CustomAttributes,Notes `
+    -Folder $folderTop -DryRun -ReportPath $dryScope | Out-Null
+$ds = Import-Csv $dryScope
+$dsWould = @($ds | Where-Object { $_.Action -like 'Would*' })
+$outOfScope = @($dsWould | Where-Object {
+    $_.Target -notlike "*$folderTop*" -and $_.Target -notlike "*$Prefix*"
+})
+Check '範圍匯入: 不碰範圍外的東西' ($outOfScope.Count -eq 0) `
+    ("Would* 共 $($dsWould.Count) 筆，範圍外 $($outOfScope.Count) 筆")
+Check '範圍匯入: 濾掉範圍外 VM 的 Notes' `
+    (@($ds | Where-Object { $_.Section -eq 'Notes' }).Count -eq 0) `
+    ("Notes 相關 $((@($ds | Where-Object { $_.Section -eq 'Notes' })).Count) 筆")
 
 # ============ 4. 正式匯入 ============
 Write-Host "`n=== [4/6] 正式匯入 ==="
