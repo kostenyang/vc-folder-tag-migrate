@@ -1,0 +1,7 @@
+# 匯出的 lab inventory（含 VM 名稱/UUID/Notes），不進版控
+export-*/
+vc-meta-export/
+*-report-*.csv
+dryrun*.csv
+apply*.csv
+verify*.csv
