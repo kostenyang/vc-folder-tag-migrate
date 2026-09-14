@@ -95,6 +95,18 @@ function Test-EntityInScope {
     }
 }
 
+# vCenter 的 tagging(vAPI/CIS)服務偶爾在 session 剛建立時回 503 Service Unavailable，重試幾次就好
+function Invoke-WithRetry {
+    param([scriptblock]$Script, [string]$What = '呼叫', [int]$Times = 3, [int]$DelaySec = 10)
+    for ($i = 1; $i -le $Times; $i++) {
+        try { return (& $Script) }
+        catch {
+            if ($i -eq $Times) { throw }
+            Write-Host "  [!] $What 失敗（$(($_.Exception.Message -split "`n")[0])），$DelaySec 秒後重試 $i/$($Times - 1)"
+            Start-Sleep -Seconds $DelaySec
+        }
+    }
+}
 function Map-Dc {
     param([string]$Name)
     foreach ($m in $DatacenterMap) {
@@ -325,14 +337,14 @@ if ($Include -contains 'Tags') {
     foreach ($r in $assignRows) { $usedCat[$r.Category] = $true; $usedTagKey["$($r.Category)|$($r.Tag)"] = $true }
 
     $catByName = @{}
-    foreach ($c in (Get-TagCategory -Server $vc)) { $catByName[$c.Name] = $c }
+    foreach ($c in (Invoke-WithRetry { Get-TagCategory -Server $vc } -What 'Get-TagCategory')) { $catByName[$c.Name] = $c }
     foreach ($c in (Read-Meta 'tag-categories.csv')) {
         if (($Folder -or $OnlyVMs) -and -not $usedCat.ContainsKey($c.Name)) { continue }
         if ($catByName.ContainsKey($c.Name)) { Add-Result 'TagCategory' 'Exists' $c.Name; continue }
         if ($DryRun) { $wouldCat[$c.Name] = $true; Add-Result 'TagCategory' 'WouldCreate' $c.Name $c.EntityType; continue }
         try {
             $et = if ([string]::IsNullOrWhiteSpace($c.EntityType)) { @('All') } else { $c.EntityType -split ';' }
-            $new = New-TagCategory -Name $c.Name -Description $c.Description -Cardinality $c.Cardinality -EntityType $et -Server $vc
+            $new = Invoke-WithRetry { New-TagCategory -Name $c.Name -Description $c.Description -Cardinality $c.Cardinality -EntityType $et -Server $vc } -What "New-TagCategory $($c.Name)"
             $catByName[$c.Name] = $new
             Add-Result 'TagCategory' 'Created' $c.Name $c.EntityType
         } catch {
@@ -341,7 +353,7 @@ if ($Include -contains 'Tags') {
     }
 
     $tagByKey = @{}
-    foreach ($t in (Get-Tag -Server $vc)) { $tagByKey["$($t.Category.Name)|$($t.Name)"] = $t }
+    foreach ($t in (Invoke-WithRetry { Get-Tag -Server $vc } -What 'Get-Tag')) { $tagByKey["$($t.Category.Name)|$($t.Name)"] = $t }
     foreach ($t in (Read-Meta 'tags.csv')) {
         $key = "$($t.Category)|$($t.Name)"
         if (($Folder -or $OnlyVMs) -and -not $usedTagKey.ContainsKey($key)) { continue }
@@ -349,7 +361,7 @@ if ($Include -contains 'Tags') {
         if (-not $catByName.ContainsKey($t.Category) -and -not $wouldCat.ContainsKey($t.Category)) { Add-Result 'Tag' 'NoCategory' $key; continue }
         if ($DryRun) { $wouldTag[$key] = $true; Add-Result 'Tag' 'WouldCreate' $key; continue }
         try {
-            $new = New-Tag -Name $t.Name -Category $catByName[$t.Category] -Description $t.Description -Server $vc
+            $new = Invoke-WithRetry { New-Tag -Name $t.Name -Category $catByName[$t.Category] -Description $t.Description -Server $vc } -What "New-Tag $key"
             $tagByKey[$key] = $new
             Add-Result 'Tag' 'Created' $key
         } catch {
@@ -389,7 +401,7 @@ if ($Include -contains 'Tags') {
             }
             if ($DryRun) { Add-Result 'TagAssignment' 'WouldAssign' "$($a.EntityType):$($a.EntityName)" $key; continue }
             try {
-                $null = New-TagAssignment -Tag $tagByKey[$key] -Entity $e -Server $vc -Confirm:$false
+                $null = Invoke-WithRetry { New-TagAssignment -Tag $tagByKey[$key] -Entity $e -Server $vc -Confirm:$false } -What "New-TagAssignment $($a.EntityName)"
                 Add-Result 'TagAssignment' 'Assigned' "$($a.EntityType):$($a.EntityName)" $key
             } catch {
                 Add-Result 'TagAssignment' 'Failed' "$($a.EntityType):$($a.EntityName)" $_.Exception.Message

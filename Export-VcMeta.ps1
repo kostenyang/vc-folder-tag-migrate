@@ -23,6 +23,18 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
 $enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
 
+# vCenter 的 tagging(vAPI/CIS)服務偶爾在 session 剛建立時回 503 Service Unavailable，重試幾次就好
+function Invoke-WithRetry {
+    param([scriptblock]$Script, [string]$What = '呼叫', [int]$Times = 3, [int]$DelaySec = 10)
+    for ($i = 1; $i -le $Times; $i++) {
+        try { return (& $Script) }
+        catch {
+            if ($i -eq $Times) { throw }
+            Write-Host "  [!] $What 失敗（$(($_.Exception.Message -split "`n")[0])），$DelaySec 秒後重試 $i/$($Times - 1)"
+            Start-Sleep -Seconds $DelaySec
+        }
+    }
+}
 function Write-Meta {
     param($Rows, [string]$Path, [string[]]$Columns)
     if (-not $Rows -or @($Rows).Count -eq 0) {
@@ -175,8 +187,8 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
 
 # --- 3. Tags ---
 if ($Include -contains 'Tags') {
-    $cats = Get-TagCategory -Server $vc
-    $tags = Get-Tag -Server $vc
+    $cats = Invoke-WithRetry { Get-TagCategory -Server $vc } -What 'Get-TagCategory'
+    $tags = Invoke-WithRetry { Get-Tag -Server $vc } -What 'Get-Tag'
     # 定義在指派算完之後才寫，這樣 -Folder 範圍下可以只留用得到的分類/標籤
 
     # 逐類型收集實體再查 tag 指派：直接 Get-TagAssignment 會被「無法存取的 datastore」等物件中斷

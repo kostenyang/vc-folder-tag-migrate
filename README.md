@@ -8,38 +8,55 @@
 | `Copy-VcCustomAttributes.ps1` | **一支搞定**：自訂屬性（定義 + 值）直接 A → B |
 | `Copy-VcFolders.ps1` | **一支搞定**：資料夾樹直接建到 B（可連 VM 一起放進去） |
 | `Copy-VcMeta.ps1` | 通用版直接 A → B，`-Include` 選要搬哪幾類 |
-| `Unregister-VmFromOldVc.ps1` | 舊 vC 端：依匯出清單把 VM 移出 inventory（檔案留著），寫 `unregistered.csv` 給新 vC 對帳 |
-| `Register-VmxFromDatastore.ps1` | 新 vC 端：掃 datastore 把 vmx/vmtx 註冊回來；`-MetaDir` 就**照舊 vC 把資料夾 / 屬性 / Notes / tag 一起做好**，結尾**對帳**列出還沒過來的 |
-| `Move-VmToNewVc.ps1` | 兩台 vC **同時連得到**時用：每台「新 vC 先註冊 → 成功才從舊 vC 拿掉」，沒有看不到的空窗；可選自動關機 / 開機回答 moved |
+| `Unregister-VmFromOldVc.ps1` | 動 3（舊 vC）：依匯出清單把 VM 移出 inventory（檔案留著），寫 `unregistered.csv` 給新 vC 對帳 |
+| `Register-VmxFromDatastore.ps1` | 動 4（新 vC）：掃 datastore 把 vmx/vmtx 註冊回來，`-PlacementCsv` 放進動 1 建好的資料夾，結尾**對帳**列出還沒過來的 |
 | `Export-VcMeta.ps1` / `Import-VcMeta.ps1` | 底層兩步式（先落 CSV、可人工編修、再匯入）；上面幾支都是包這兩支 |
 | `Test-VcMeta.ps1` / `Test-RegisterVmx.ps1` | 端到端自我測試（建測試物件 → 跑 → 獨立驗證 → 清除） |
 
-## 0. 主線：datastore 搬家（兩台 vC 不必同時在線，中間靠落地檔）
+## 0. 主線：五動分開做（兩台 vC 不必同時在線，每動可獨立重跑）
 
 ```
-舊 vC  ① Export-VcMeta.ps1            → export-A\      落地：資料夾 / VM 位置 / tag / 屬性 / Notes（這份 = 清單 = 真相源）
-舊 vC  ② Unregister-VmFromOldVc.ps1    → 依清單 unregister（開著的不動），寫 export-A\unregistered.csv
-       …datastore 卸載、搬到新 vC…（隔幾小時、幾天都可以）
-新 vC  ③ Register-VmxFromDatastore.ps1 -MetaDir export-A
-          → 註冊 + 放回原資料夾 + 屬性 + Notes + tag，結尾對帳：unregistered.csv 裡誰還沒過來
+動 0  舊 vC   Export-VcMeta.ps1                                      → export-A\   一次落地全部：資料夾 / VM 位置 / tag / 屬性 / Notes
+動 1  新 vC   Import-VcMeta.ps1 -Include Folders                     資料夾樹先建好
+動 2  新 vC   Import-VcMeta.ps1 -Include CustomAttributes,Tags       屬性定義、tag 分類/標籤先建好（VM 還沒過去，值/指派先不會有）
+動 3  舊 vC   Unregister-VmFromOldVc.ps1                             VM 移出舊 vC，寫 export-A\unregistered.csv
+       …datastore 卸載、搬到新 vC…（隔多久都可以，清單在 export-A\）
+動 4  新 vC   Register-VmxFromDatastore.ps1 -PlacementCsv            只註冊、放進動 1 的資料夾，結尾對帳：unregistered.csv 裡誰還沒過來
+動 5  新 vC   Import-VcMeta.ps1 -Include CustomAttributes,Notes,Tags 補 VM 的屬性值 / Notes / tag 指派（VM 已在，全部對得到）
 ```
 
 ```bash
+# 動 0（舊 vC）
 pwsh -Command "& .\Export-VcMeta.ps1 -Server <舊vC> -User administrator@vsphere.local -Password '<pw>' -OutDir .\export-A -Folder 'Linux'"
 ```
 ```bash
-pwsh -Command "& .\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password '<pw>' -MetaDir .\export-A -Datastore ds01 -DryRun"
+# 動 1（新 vC）
+pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -InDir .\export-A -DatacenterMap '<舊DC>=<新DC>' -Include Folders"
 ```
 ```bash
-pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap '<舊DC>=<新DC>' -DryRun"
+# 動 2（新 vC）
+pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -InDir .\export-A -DatacenterMap '<舊DC>=<新DC>' -Include CustomAttributes,Tags"
+```
+```bash
+# 動 3（舊 vC）
+pwsh -Command "& .\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password '<pw>' -MetaDir .\export-A -Datastore ds01"
+```
+```bash
+# 動 4（新 vC）
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv"
+```
+```bash
+# 動 5（新 vC）
+pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -InDir .\export-A -DatacenterMap '<舊DC>=<新DC>' -Include CustomAttributes,Notes,Tags"
 ```
 
-- ② 的安全機制：沒有 ① 的匯出檔不給做；清單的 vmx 路徑要跟現在一致（防舊匯出檔）；開著的 VM 跳過（或 `-ShutdownFirst`）；不接受「全部」，要給 `-Datastore` / `-Folder` / `-VM`。
-- ③ 可以分批跑很多次，每次都會對帳；VM 看不到的那段時間，`unregistered.csv` 就是你的清單。
-- 兩台 vC 同時連得到、想完全沒有空窗 → 用 `Move-VmToNewVc.ps1`（見 §10）。
+- 每一動都支援 `-DryRun`，都是 idempotent：重跑只會補缺的、不會重做。
+- 動 1 / 2 在 VM 過去前就能做完，動 4 註冊時資料夾已經在；動 2 此時只建定義，VM 的值 / 指派等動 5。
+- 動 3 的安全機制：沒有動 0 的匯出檔不給做；清單 vmx 路徑要跟現在一致；開著的跳過（`-ShutdownFirst` 可關）；不接受「全部」。
+- 動 4 可分批跑很多次，每次都對帳；VM 看不到的那段時間，`unregistered.csv` 就是清單。
+- 動 4 的 `-MetaDir` 可以把動 5 併進去一次做（可選，不是主線）。
 
 ## 0b. 只搬中繼資料（VM 已經在新 vC）
-
 **只搬自訂屬性**
 ```bash
 pwsh -Command "& .\Copy-VcCustomAttributes.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -DryRun"
@@ -261,17 +278,7 @@ vC B   ④ Register-VmxFromDatastore.ps1 -MetaDir export-A -DatacenterMap 'A=B'
 
 共同參數：`-SourceServer/-SourceUser/-SourcePassword`、`-TargetServer/-TargetUser/-TargetPassword`、`-DatacenterMap`、`-Folder`、`-Datacenter`、`-DryRun`、`-WorkDir`。
 
-## 10. 兩台 vC 同時連得到：`Move-VmToNewVc.ps1`（零空窗交接）
-
-前提：VM 所在 datastore 兩邊都掛得到。每台 VM：確認關機（或 `-ShutdownFirst`）→ **新 vC 先註冊** → 成功才從舊 vC unregister（失敗就不動舊 vC）→ 放回原資料夾 + 屬性 + Notes + tag → `-PowerOnAfter` 在新 vC 開機並自動回答「I moved it」。匯出在一開始自動做（VM 還在舊 vC）。
-
-```bash
-pwsh -Command "& .\Move-VmToNewVc.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -Folder 'Linux' -TargetCluster cl01 -DatacenterMap '<舊DC>=<新DC>' -DryRun"
-```
-
-實機驗證（2026-09-14）：`zz-real-vm03` 從 vC A `ZZ-Real/Sub` 交接到 vC B，Moved → 開機 → 屬性 / tag / 資料夾一致，舊 vC 上已不存在。
-
-## 11. 落地三段式實機驗證（2026-09-14）
+## 10. 落地流程實機驗證（2026-09-14）
 
 | 步驟 | 動作 | 結果 |
 |---|---|---|
@@ -283,3 +290,19 @@ pwsh -Command "& .\Move-VmToNewVc.ps1 -SourceServer <舊vC> -SourcePassword '<pw
 | 核對 | 兩台在 `ZZ-Real/Sub`，屬性 / Notes / tag 與舊 vC 一致，PoweredOff | ✅ |
 
 實跑抓到並修掉的 bug：PowerShell `-like "[ds] *"` 會把 `[ds]` 當字元集合 wildcard，datastore 篩選全部落空 → 改 `StartsWith`。
+
+## 11. 五動分開實機驗證（2026-09-14）
+
+真兩台 vC + 共用 NFS，兩台 VM（`ZZ-Real/Sub`，各有屬性 / Notes / tag），完全照 §0 的順序、每動一條指令：
+
+| 動 | 指令 | 結果 |
+|---|---|---|
+| 0 舊 vC | `Export-VcMeta -Folder ZZ-Real` | 8 個 CSV |
+| 1 新 vC | `Import-VcMeta -Include Folders` | Folder/Created 2 |
+| 2 新 vC | `Import-VcMeta -Include CustomAttributes,Tags` | 屬性定義 1、tag 分類 1、標籤 1 建好；VM 的值/指派 EntityNotFound（預期，VM 還沒過去） |
+| 3 舊 vC | `Unregister-VmFromOldVc -Datastore vc-migtest` | Unregistered 2，`unregistered.csv` 2 筆 |
+| 4 新 vC | `Register-VmxFromDatastore -PlacementCsv` | Registered 2、Placed 2（進動 1 的資料夾）；對帳 還沒過來 0 台 |
+| 5 新 vC | `Import-VcMeta -Include CustomAttributes,Notes,Tags` | 屬性值 2、Notes 2（vmx 自帶）、tag 指派 2 |
+| 核對 | 新 vC 兩台：資料夾 / 屬性 / Notes / tag 與舊 vC 一致，PoweredOff；舊 vC 已無 | ✅ |
+
+過程中 vC B 的 tagging 服務（vAPI/CIS）兩次在 session 剛建立時回 `503 Service Unavailable`，重跑同一動就過——證明每動可獨立重跑；同時把 tag 相關呼叫加了 3 次退避重試（`Invoke-WithRetry`），之後不必手動重跑。
