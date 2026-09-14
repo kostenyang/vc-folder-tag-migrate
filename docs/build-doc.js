@@ -3,7 +3,7 @@ const path = require('path');
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,
   WidthType, ShadingType, AlignmentType, BorderStyle, LevelFormat, PageBreak,
-  TableOfContents, Header, Footer, PageNumber, TabStopType,
+  TableOfContents, Header, Footer, PageNumber, TabStopType, ImageRun,
 } = require('docx');
 
 const OUT = process.argv[2];
@@ -55,6 +55,21 @@ function tbl(headers, rows, widths, opts = {}) {
   return [new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, columnWidths: w, rows: [hdr, ...body] }), new Paragraph({ spacing: { after: 120 } })];
 }
 const mono = (s) => new TextRun({ text: s, font: MONO, size: 18 });
+// 截圖：讀 PNG IHDR 取尺寸，等比縮到 670px 寬；圖 + 圖說
+const SHOTS = process.env.SHOTS || 'E:/9.1/doc-shots/vc-migrate/crop/';   // repo 內為 docs/shots/
+let figNo = 0;
+function IMG(file, caption) {
+  const buf = fs.readFileSync(SHOTS + file);
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  const W = 670, H = Math.round(h * W / w);
+  figNo++;
+  return [
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 60 }, keepNext: true,
+      children: [new ImageRun({ type: 'png', data: buf, transformation: { width: W, height: H } })] }),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 200 },
+      children: [t('圖 ' + figNo + '　' + caption, { size: 18, color: '555555' })] }),
+  ];
+}
 
 // ---------- content ----------
 const c = [];
@@ -269,7 +284,8 @@ c.push(...tbl(['項目', '內容'], [
   ['新 vC（B）', '10.0.1.19，vCenter 9.1.1 build 25712839，Datacenter「m01-dc01」，主機 vcd-esx01.home.lab'],
   ['共用儲存', 'NFS 10.0.0.60:/nfs/vc-migtest，掛成 datastore「vc-migtest」到兩邊各一台主機（191 GB free 兩邊一致）'],
   ['執行機', 'Windows Server 2022，pwsh 7，PowerCLI 13.5.0'],
-  ['測試資料', '兩台 VM：zz-real-vm01（關機）、zz-real-vm02（開機，用來驗證動 3 的擋下機制）；各有 1 GB vmdk'],
+  ['測試資料', '兩台 VM：zz-real-vm01（關機）、zz-real-vm02（開機，用來驗證動 3 的擋下機制）；各有 1 GB vmdk。§7.6 另一輪加一個範本'],
+  ['畫面截圖', '以 Chrome DevTools Protocol 自動化擷取 vSphere Client 畫面（同一次實跑，非事後補拍）'],
 ], [2, 8.4]));
 c.push(P('兩台 VM 在舊 vC 的初始狀態（皆在資料夾 ZZ-Real/Sub，自訂屬性 zz-real-owner、Notes、tag zz-real-env/prod）：'));
 c.push(...CB([
@@ -278,6 +294,9 @@ c.push(...CB([
   'zz-real-vm02  PoweredOn ZZ-Real/Sub [vc-migtest] zz-real-vm02/zz-real-vm02.vmx',
   'zz-real-vm01 PoweredOff ZZ-Real/Sub [vc-migtest] zz-real-vm01/zz-real-vm01.vmx',
 ], 'EEF3FB'));
+c.push(P('vSphere Client 上的搬前狀態（舊 vC）：'));
+c.push(...IMG('01-old-vm-summary.png', '舊 vC：資料夾樹 ZZ-Real/Sub 下有 zz-real-vm01、vm02 與範本 tpl01'));
+c.push(...IMG('01b-old-vm-summary-bottom.png', '舊 vC：zz-real-vm01 的 Tags（prod / zz-real-env）、Notes、Custom Attributes（zz-real-owner）'));
 
 c.push(H2('7.2 動 0：舊 vC 匯出'));
 c.push(...CB([
@@ -309,6 +328,7 @@ c.push(...CB([
   '================ 結果 ================',
   '  Folder/Created                         2',
 ]));
+c.push(...IMG('03-new-folder-empty.png', '新 vC：動 1 之後 ZZ-Real/Sub 已建好但還是空的；Recent Tasks 可見腳本建立資料夾的工作'));
 
 c.push(H2('7.4 動 2：新 vC 建屬性定義與 tag 分類'));
 c.push(...CB([
@@ -322,6 +342,8 @@ c.push(...CB([
   '  TagAssignment/EntityNotFound           2      ← VM 還沒過去，預期',
   '  TagCategory/Created                    1',
 ]));
+c.push(...IMG('04-new-tags.png', '新 vC：Tags & Custom Attributes → Tags，篩 zz-real 只有 prod / zz-real-env（動 2 建的）'));
+c.push(...IMG('04b-new-custom-attributes.png', '新 vC：Custom Attributes 清單已有 zz-real-owner（Virtual Machine 型）'));
 
 c.push(H2('7.5 動 3：舊 vC unregister'));
 c.push(P('先 DryRun——vm02 當時是開著的，被正確擋下：'));
@@ -345,6 +367,7 @@ c.push(...CB([
   '"2026-09-14 15:42:46","zz-real-vm01","False","[vc-migtest] zz-real-vm01/zz-real-vm01.vmx","ZZ-Real/Sub","503f0e10-...","10.0.0.101"',
   '"2026-09-14 15:42:47","zz-real-vm02","False","[vc-migtest] zz-real-vm02/zz-real-vm02.vmx","ZZ-Real/Sub","503f4f6e-...","10.0.0.101"',
 ], 'EEF3FB'));
+c.push(...IMG('05-old-folder-after-unreg.png', '舊 vC：動 3 之後 ZZ-Real/Sub 已空（VM 移出 inventory，檔案還在 datastore）'));
 
 c.push(H2('7.6 動 4：新 vC 依新 CSV 註冊'));
 c.push(P('另一輪實測（同環境，多加一個範本 zz-real-tpl01）：動 3 用 -Cluster Cluster -Datastore vc-migtest 交集篩出 3 台並產生 unregistered.csv，動 4 直接吃它：'));
@@ -368,6 +391,8 @@ c.push(...CB([
   '  舊 vC 端位於 vc-migtest 的 VM：3 台；目標端已有 3 台；還沒過來 0 台',
 ]));
 c.push(P('新 vC 獨立查詢：三個物件都在 ZZ-Real/Sub，範本仍是範本（Type=Template），兩台 VM 動 5 之後屬性與 tag 到位；舊 vC 已無 zz-real-*。'));
+c.push(...IMG('06-new-folder-after-reg.png', '新 vC：動 4 之後 ZZ-Real/Sub 的 VMs 頁有 vm01、vm02（範本在 VM Templates 頁）；Recent Tasks 為「登錄虛擬機器」'));
+c.push(...IMG('07-new-vm-before-step5.png', '新 vC：動 5 之前的 zz-real-vm01——Notes 已在（vmx 自帶），Tags 是 No tags assigned'));
 
 c.push(H2('7.7 動 5：新 vC 補屬性值 / Notes / tag'));
 c.push(...CB([
@@ -383,6 +408,8 @@ c.push(...CB([
   '  TagAssignment/Assigned                 2',
   '  TagCategory/Exists                     1',
 ]));
+c.push(...IMG('08-new-vm-after-step5.png', '新 vC：動 5 之後 zz-real-vm01 的 Tags 已是 prod / zz-real-env'));
+c.push(...IMG('08b-new-vm-custom-attributes.png', '新 vC：Custom Attributes 卡片 zz-real-owner = 基礎架構組-zz-real-vm01，與舊 vC 一致'));
 
 c.push(H2('7.8 核對結果'));
 c.push(P('用獨立查詢（不靠腳本自己的回報）從新 vC 抓兩台 VM 的實際狀態，與舊 vC 匯出時比對：'));
