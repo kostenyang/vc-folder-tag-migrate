@@ -298,7 +298,7 @@ if ($PlacementCsv -and (Test-Path $PlacementCsv)) {
     if ($manifest.Count -and ($manifest[0].PSObject.Properties.Name -contains 'VmPathName')) {
         $onTarget = @{}
         foreach ($v in (Get-View -ViewType VirtualMachine -Property Name -Server $vc)) { $onTarget[$v.Name] = $true }
-        foreach ($n in $script:RegisteredNames) { $onTarget[$n] = $true }
+        if (-not $DryRun) { foreach ($n in $script:RegisteredNames) { $onTarget[$n] = $true } }
         # 期望集合：優先用 Unregister-VmFromOldVc 寫的 unregistered.csv（實際拔掉的那批），
         # 沒有就用匯出清單裡 vmx 在這些 datastore 上的
         $unregLog = Join-Path (Split-Path $PlacementCsv -Parent) 'unregistered.csv'
@@ -311,7 +311,12 @@ if ($PlacementCsv -and (Test-Path $PlacementCsv)) {
         }
         $pending = @($expected | Where-Object { -not $onTarget.ContainsKey($_.VMName) })
         Write-Host "`n================ 對帳（$basis vs 目標端）================"
-        Write-Host ("  舊 vC 端位於 {0} 的 VM：{1} 台；目標端已有 {2} 台；還沒過來 {3} 台" -f ($Datastore -join ','), $expected.Count, ($expected.Count - $pending.Count), $pending.Count)
+        if ($DryRun) {
+            $covered = @($pending | Where-Object { $script:RegisteredNames -contains $_.VMName }).Count
+            Write-Host ("  舊 vC 端位於 {0} 的 VM：{1} 台；目標端已有 {2} 台；還沒過來 {3} 台（這次會註冊 {4} 台，跑完剩 {5} 台）" -f ($Datastore -join ","), $expected.Count, ($expected.Count - $pending.Count), $pending.Count, $covered, ($pending.Count - $covered))
+        } else {
+            Write-Host ("  舊 vC 端位於 {0} 的 VM：{1} 台；目標端已有 {2} 台；還沒過來 {3} 台" -f ($Datastore -join ","), $expected.Count, ($expected.Count - $pending.Count), $pending.Count)
+        }
         foreach ($m in $pending) {
             Add-Result 'PendingOnSource' $m.VMName "$($m.VmPathName)"
         }
