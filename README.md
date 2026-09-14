@@ -133,3 +133,36 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <目標vC> -User administrator@vsph
 | Tag 分類、標籤、屬性定義 | 只帶「範圍內物件真的用到」的那些（`-AllDefinitions` 可全帶） |
 
 `-Folder` 兩邊都能用：匯出時縮範圍，或者已經有整台 vC 的匯出檔、匯入時才縮範圍（分批一個資料夾一個資料夾搬時很好用）。
+
+## 8. 從 datastore 把 VM 註冊回 inventory `Register-VmxFromDatastore.ps1`
+
+datastore 搬到新 vCenter 後檔案都在、inventory 是空的——掃 `.vmx` / `.vmtx` 把它們註冊回來。
+
+```bash
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <目標vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -DryRun"
+```
+
+```bash
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <目標vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv -CreateFolders"
+```
+
+參數：
+- `-Datastore`：可多個；`-Cluster` / `-VMHost` 決定註冊到哪（叢集內有掛該 datastore 的主機輪流用）
+- `-PlacementCsv`：拿 `Export-VcMeta` 的 `vm-placement.csv`，註冊完直接依 VMName 放進原本的資料夾（`-CreateFolders` 不存在就建）
+- `-Folder`：沒 placement 對照時的預設資料夾（預設 DC 根）
+- `-Include` / `-Exclude`：名稱 wildcard（預設排除 `vCLS*`）
+- `-NoTemplates`：略過 `.vmtx`；`-NameFromFile`：用檔名當 VM 名（預設抓 vmx 內的 `displayName`）
+- `-DryRun`：只掃、不註冊
+
+規則：已註冊的 vmx（比對 `[datastore] 路徑`）一律跳過，重跑安全；`.vmtx` 註冊成範本；**只註冊不開機**（開機時的 moved/copied 詢問要自己回）。
+
+自我測試 `Test-RegisterVmx.ps1`：建丟棄式 VM + 範本 → unregister → 註冊回來 → 驗證（路徑一致、範本仍是範本、placement 資料夾、沒開機、重跑冪等）→ 清除。實測 **13/13 ALL PASS**（vCenter 9.1.1，VMFS）。
+
+### 整套「datastore 搬家」流程
+
+```
+vC A   Export-VcMeta.ps1                          → export-A\*.csv
+       把 datastore 從 vC A 卸載、掛到 vC B（儲存端操作）
+vC B   Register-VmxFromDatastore.ps1 -PlacementCsv export-A\vm-placement.csv   → VM 回 inventory + 進原資料夾
+vC B   Import-VcMeta.ps1 -InDir export-A          → tag / 自訂屬性 / Notes 補上（VM 已在，全部對得到）
+```
