@@ -180,7 +180,7 @@ pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <目標vC> -User admini
 
 規則：已註冊的 vmx（比對 `[datastore] 路徑`）一律跳過，重跑安全；`.vmtx` 註冊成範本；**只註冊不開機**（開機時的 moved/copied 詢問要自己回）。
 
-自我測試 `Test-RegisterVmx.ps1`：建丟棄式 VM + 範本 → unregister → 註冊回來 → 驗證（路徑一致、範本仍是範本、placement 資料夾、沒開機、重跑冪等）→ 清除。實測 **13/13 ALL PASS**（vCenter 9.1.1，VMFS）。
+自我測試 `Test-RegisterVmx.ps1`：建丟棄式 VM + 範本 → unregister → 註冊回來 → 驗證（路徑一致、範本仍是範本、placement 資料夾、沒開機、重跑冪等）→ 清除。舊版 13 項已併入下方「照舊 vC」的 19 項測試（vCenter 9.1.1，VMFS）。
 
 ### 照舊 vC 一次做好：`-SourceServer` / `-MetaDir`
 
