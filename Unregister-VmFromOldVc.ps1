@@ -13,6 +13,9 @@
   # 把 ds01 上、清單裡的 VM 全部 unregister（先看）
   ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Datastore ds01 -DryRun
 
+  # cluster 裡且在 ds01 上的（多條件取交集）
+  ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .export-A -Cluster cl01 -Datastore ds01
+
   # 只做某個資料夾的
   ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Folder 'Linux'
 #>
@@ -23,9 +26,12 @@ param(
     [Parameter(Mandatory)][string]$Password,
     [Parameter(Mandatory)][string]$MetaDir,        # Export-VcMeta 的 -OutDir
 
+    # 篩選條件：可以給多個，同時給時取「交集」（例：-Cluster cl01 -Datastore ds01 = cl01 裡且在 ds01 上的）
     [string[]]$Datastore,              # 清單裡 vmx 在這些 datastore 上的
+    [string[]]$Cluster,                # 目前跑在這些叢集上的（連舊 vC 即時查）
+    [string[]]$VMHost,                 # 目前跑在這些主機上的（連舊 vC 即時查）
     [string[]]$Folder,                 # 清單裡在這些資料夾子樹的
-    [string[]]$VM,                     # 或直接點名
+    [string[]]$VM,                     # 直接點名
     [switch]$ShutdownFirst,
     [int]$ShutdownTimeoutSec = 300,
     [switch]$DryRun,
@@ -35,7 +41,7 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
 $enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
-if (-not $Datastore -and -not $Folder -and -not $VM) { throw "要給 -Datastore / -Folder / -VM 至少一個，不接受「全部」" }
+if (-not $Datastore -and -not $Cluster -and -not $VMHost -and -not $Folder -and -not $VM) { throw "要給 -Datastore / -Cluster / -VMHost / -Folder / -VM 至少一個，不接受「全部」" }
 $MetaDir = (Resolve-Path $MetaDir).Path
 $manifestPath = Join-Path $MetaDir 'vm-placement.csv'
 if (-not (Test-Path $manifestPath)) { throw "$MetaDir 裡沒有 vm-placement.csv —— 先跑 Export-VcMeta.ps1 再來" }
@@ -55,23 +61,46 @@ function Add-Result {
     Write-Host ("  {0} {1,-18} {2}  {3}" -f $tag, $Action, $Target, $Detail)
 }
 
-# --- 從清單挑要做的 ---
-$picked = @($manifest | Where-Object {
-    $r = $_
-    $ok = $false
-    if ($VM        -and ($VM -contains $r.VMName)) { $ok = $true }
-    if ($Datastore -and ($Datastore | Where-Object { $r.VmPathName.StartsWith("[$_] ") })) { $ok = $true }
-    if ($Folder    -and ($Folder | Where-Object { $f = $_.Trim('/'); $r.FolderPath -eq $f -or $r.FolderPath -like "$f/*" })) { $ok = $true }
-    $ok
-})
-Write-Host "[*] 清單 $($manifest.Count) 台，符合條件 $($picked.Count) 台"
-if (-not $picked.Count) { return }
-
-# --- 連線 ---
+# --- 連線（-Cluster / -VMHost 要即時查舊 vC）---
 Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -DisplayDeprecationWarnings $false -Scope Session -Confirm:$false | Out-Null
 $vc = Connect-VIServer -Server $Server -User $User -Password $Password
 Write-Host "[+] 已連線 $($vc.Name) ($($vc.Version))"
 if ($DryRun) { Write-Host "[!] DryRun：只檢查、不 unregister" -ForegroundColor Yellow }
+
+# --- 從清單挑要做的（多個條件取交集）---
+$inCluster = $null
+if ($Cluster -or $VMHost) {
+    $inCluster = @{}
+    $hostIds = @{}
+    foreach ($n in $Cluster) {
+        $o = Get-Cluster -Name $n -Server $vc -ErrorAction SilentlyContinue
+        if (-not $o) { Write-Host "  [!] 舊 vC 找不到叢集 '$n'"; continue }
+        foreach ($h in ($o | Get-VMHost -Server $vc)) { $hostIds[$h.ExtensionData.MoRef.ToString()] = $true }
+    }
+    foreach ($n in $VMHost) {
+        $o = Get-VMHost -Name $n -Server $vc -ErrorAction SilentlyContinue
+        if (-not $o) { Write-Host "  [!] 舊 vC 找不到主機 '$n'"; continue }
+        $hostIds[$o.ExtensionData.MoRef.ToString()] = $true
+    }
+    # 用 view 依 Runtime.Host 篩：VM 與範本一次涵蓋（Get-Template -Location 不接受 Cluster）
+    foreach ($v in (Get-View -ViewType VirtualMachine -Property Name,Runtime.Host -Server $vc)) {
+        if ($v.Runtime.Host -and $hostIds.ContainsKey($v.Runtime.Host.ToString())) { $inCluster[$v.Name] = $true }
+    }
+    Write-Host "[*] 叢集/主機 $((@($Cluster) + @($VMHost) | Where-Object { $_ }) -join ',') 上目前有 $($inCluster.Count) 台"
+}
+$picked = @($manifest | Where-Object {
+    $r = $_
+    if ($VM        -and ($VM -notcontains $r.VMName)) { return $false }
+    if ($Datastore -and -not ($Datastore | Where-Object { $r.VmPathName.StartsWith("[$_] ") })) { return $false }
+    if ($Folder    -and -not ($Folder | Where-Object { $f = $_.Trim('/'); $r.FolderPath -eq $f -or $r.FolderPath -like "$f/*" })) { return $false }
+    if ($null -ne $inCluster -and -not $inCluster.ContainsKey($r.VMName)) { return $false }
+    $true
+})
+$cond = @()
+if ($VM) { $cond += "VM=$($VM -join ',')" }; if ($Datastore) { $cond += "datastore=$($Datastore -join ',')" }
+if ($Cluster) { $cond += "cluster=$($Cluster -join ',')" }; if ($VMHost) { $cond += "host=$($VMHost -join ',')" }; if ($Folder) { $cond += "folder=$($Folder -join ',')" }
+Write-Host "[*] 清單 $($manifest.Count) 台，符合 [$($cond -join ' AND ')] 的 $($picked.Count) 台"
+if (-not $picked.Count) { Disconnect-VIServer -Server $vc -Confirm:$false | Out-Null; return }
 
 $done = New-Object System.Collections.ArrayList
 foreach ($r in $picked) {

@@ -142,7 +142,16 @@ if ($Include -contains 'Folders') {
 # --- 2. VM 位置 + 5. Notes ---
 if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Folder) {
     if ($Folder) { $scopeVmIds = @{} }
-    $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template,Config.Files.VmPathName,Runtime.PowerState -Server $vc
+    $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template,Config.Files.VmPathName,Runtime.PowerState,Runtime.Host -Server $vc
+    # host -> 名稱 / 所屬叢集（清單多記 Cluster / VMHost，Unregister 可依 cluster 篩）
+    $hostName = @{}; $hostCluster = @{}
+    $clusterName = @{}
+    foreach ($cl in (Get-View -ViewType ClusterComputeResource -Property Name -Server $vc)) { $clusterName[$cl.MoRef.ToString()] = $cl.Name }
+    foreach ($hv in (Get-View -ViewType HostSystem -Property Name,Parent -Server $vc)) {
+        $hostName[$hv.MoRef.ToString()] = $hv.Name
+        $pid2 = if ($hv.Parent) { $hv.Parent.ToString() } else { '' }
+        $hostCluster[$hv.MoRef.ToString()] = if ($clusterName.ContainsKey($pid2)) { $clusterName[$pid2] } else { '' }
+    }
     $place = New-Object System.Collections.ArrayList
     $notes = New-Object System.Collections.ArrayList
     foreach ($vm in $vmViews) {
@@ -164,6 +173,8 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
             InVApp       = (-not $info)
             VmPathName   = $vm.Config.Files.VmPathName
             PowerState   = "$($vm.Runtime.PowerState)"
+            VMHost       = if ($vm.Runtime.Host) { $hostName[$vm.Runtime.Host.ToString()] } else { '' }
+            Cluster      = if ($vm.Runtime.Host) { $hostCluster[$vm.Runtime.Host.ToString()] } else { '' }
             MoRef        = $vm.MoRef.ToString()
         })
         $ann = $vm.Config.Annotation
@@ -178,7 +189,7 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
         }
     }
     if ($Include -contains 'VMPlacement') {
-        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','VmPathName','PowerState','MoRef')
+        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','VmPathName','PowerState','VMHost','Cluster','MoRef')
     }
     if ($Include -contains 'Notes') {
         Write-Meta ($notes | Sort-Object EntityName) (Join-Path $OutDir 'notes.csv') @('Datacenter','EntityType','EntityName','InstanceUuid','Notes')

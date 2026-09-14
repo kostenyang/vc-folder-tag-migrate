@@ -52,6 +52,7 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere
 
 - 每一動都支援 `-DryRun`，都是 idempotent：重跑只會補缺的、不會重做。
 - 動 1 / 2 在 VM 過去前就能做完，動 4 註冊時資料夾已經在；動 2 此時只建定義，VM 的值 / 指派等動 5。
+- 動 3 的篩選：`-Datastore` / `-Cluster` / `-VMHost` / `-Folder` / `-VM`，可以同時給，**取交集**（例 `-Cluster cl01 -Datastore ds01` = cl01 裡且在 ds01 上的）。
 - 動 3 的安全機制：沒有動 0 的匯出檔不給做；清單 vmx 路徑要跟現在一致；開著的跳過（`-ShutdownFirst` 可關）；不接受「全部」。
 - 動 4 可分批跑很多次，每次都對帳；VM 看不到的那段時間，`unregistered.csv` 就是清單。
 - 動 4 的 `-MetaDir` 可以把動 5 併進去一次做（可選，不是主線）。
@@ -86,7 +87,7 @@ pwsh -File .\Export-VcMeta.ps1 -Server <來源vC> -User administrator@vsphere.lo
 | 檔案 | 內容 |
 |---|---|
 | `folders.csv` | Folder 樹（Datacenter / 類型 VM,HostAndCluster,Datastore,Network / 相對路徑） |
-| `vm-placement.csv` | 每台 VM/範本 在哪個 Folder（含 InstanceUuid、IsTemplate、InVApp） |
+| `vm-placement.csv` | 每台 VM/範本 在哪個 Folder（含 InstanceUuid、IsTemplate、InVApp、VmPathName、PowerState、VMHost、Cluster） |
 | `tag-categories.csv` | Tag 分類（Cardinality、可套用的 EntityType） |
 | `tags.csv` | 標籤（分類 / 名稱 / 說明） |
 | `tag-assignments.csv` | 誰被貼了什麼標籤 |

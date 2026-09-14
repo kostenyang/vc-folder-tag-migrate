@@ -154,7 +154,7 @@ c.push(...tbl(['參數', '說明'], [
 ], [3.2, 7.2]));
 c.push(...tbl(['檔案', '內容'], [
   ['folders.csv', '資料夾樹：Datacenter / 類型（VM、HostAndCluster、Datastore、Network）/ 相對路徑 / 深度'],
-  ['vm-placement.csv', '每台 VM / 範本在哪個資料夾；含 InstanceUuid、BiosUuid、IsTemplate、InVApp、VmPathName、PowerState'],
+  ['vm-placement.csv', '每台 VM / 範本在哪個資料夾；含 InstanceUuid、BiosUuid、IsTemplate、InVApp、VmPathName、PowerState、VMHost、Cluster'],
   ['tag-categories.csv / tags.csv', 'Tag 分類（Cardinality、EntityType）與標籤'],
   ['tag-assignments.csv', '誰被貼了什麼標籤（VM 帶 UUID、資料夾帶路徑）'],
   ['custom-attributes.csv / custom-attribute-values.csv', '自訂屬性定義（含 TargetType）與每個物件的值'],
@@ -190,7 +190,7 @@ c.push(P([bold('安全機制：')]));
 c.push(B('沒有匯出檔不給做——unregister 之後舊 vC 上的 tag 指派、屬性值就沒了。'));
 c.push(B('清單裡的 vmx 路徑要跟現在一致（SkippedStale），防止拿舊的匯出檔來操作。'));
 c.push(B('開機中的 VM 跳過（SkippedPoweredOn），除非加 -ShutdownFirst。'));
-c.push(B('同名多台跳過（SkippedAmbiguous）；不接受「全部」，一定要給 -Datastore / -Folder / -VM 其中一個。'));
+c.push(B('同名多台跳過（SkippedAmbiguous）；不接受「全部」，一定要給 -Datastore / -Cluster / -VMHost / -Folder / -VM 其中一個。'));
 c.push(B([t('每台成功 unregister 的都追加到 '), mono('<MetaDir>\\unregistered.csv'), t('（名稱 / vmx / 時間 / 原資料夾 / UUID），這就是動 4 對帳的依據。')]));
 
 c.push(H2('4.4 動 4：Register-VmxFromDatastore.ps1（新 vC）'));
