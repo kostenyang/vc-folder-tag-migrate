@@ -130,7 +130,7 @@ if ($Include -contains 'Folders') {
 # --- 2. VM 位置 + 5. Notes ---
 if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Folder) {
     if ($Folder) { $scopeVmIds = @{} }
-    $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template -Server $vc
+    $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template,Config.Files.VmPathName,Runtime.PowerState -Server $vc
     $place = New-Object System.Collections.ArrayList
     $notes = New-Object System.Collections.ArrayList
     foreach ($vm in $vmViews) {
@@ -150,6 +150,8 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
             IsTemplate   = [bool]$vm.Config.Template
             FolderPath   = if ($info) { $info.path } else { '' }
             InVApp       = (-not $info)
+            VmPathName   = $vm.Config.Files.VmPathName
+            PowerState   = "$($vm.Runtime.PowerState)"
             MoRef        = $vm.MoRef.ToString()
         })
         $ann = $vm.Config.Annotation
@@ -164,7 +166,7 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
         }
     }
     if ($Include -contains 'VMPlacement') {
-        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','MoRef')
+        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','VmPathName','PowerState','MoRef')
     }
     if ($Include -contains 'Notes') {
         Write-Meta ($notes | Sort-Object EntityName) (Join-Path $OutDir 'notes.csv') @('Datacenter','EntityType','EntityName','InstanceUuid','Notes')

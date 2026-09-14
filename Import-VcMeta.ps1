@@ -26,7 +26,7 @@ param(
     [string[]]$Include = @('Folders','Tags','CustomAttributes','Notes'),
     [string[]]$DatacenterMap,          # 例：-DatacenterMap 'DC-A=DC-B','Lab=Lab2'
     [string[]]$Folder,                 # 只匯入這些 VM 資料夾(含子樹)與裡面的 VM，例：-Folder 'Linux'
-    [string[]]$OnlyVMs,                # 只處理這些名字的 VM（其他型別不受影響）；Register 註冊完補資料用
+    [string[]]$OnlyVMs,                # 只處理這些名字的 VM、其他型別全跳過；Register/Move 註冊完補資料用
     [switch]$MoveVMs,                  # 把 VM 搬進對應 Folder（預設不搬）
     [switch]$DryRun,
     [string]$ReportPath
@@ -82,9 +82,10 @@ function Test-VmInScope {
     return $script:ScopeVmName.ContainsKey($Name)
 }
 # tag/屬性的指派：資料夾看路徑、VM 看是否在範圍內，其他型別在 -Folder 模式下一律跳過
-# （-OnlyVMs 只限制 VM 型別，其他型別不受影響）
+# （-OnlyVMs：只處理這些 VM，其他型別一律跳過 —— Register/Move 註冊完補資料用）
 function Test-EntityInScope {
     param([string]$EntityType, [string]$EntityName, [string]$EntityUuid, [string]$EntityPath)
+    if ($OnlyVMs -and $EntityType -ne 'VirtualMachine') { return $false }
     if ($EntityType -eq 'VirtualMachine' -and -not (Test-VmInScope $EntityName $EntityUuid)) { return $false }
     if (-not $Folder) { return $true }
     switch ($EntityType) {

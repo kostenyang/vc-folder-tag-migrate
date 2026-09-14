@@ -292,6 +292,32 @@ if ($MetaDir -and $script:RegisteredNames.Count) {
     & "$here\Import-VcMeta.ps1" @imp
 }
 
+# --- 對帳：匯出清單裡、在這些 datastore 上、但 B 端還沒出現的 VM ---
+if ($PlacementCsv -and (Test-Path $PlacementCsv)) {
+    $manifest = @(Import-Csv $PlacementCsv)
+    if ($manifest.Count -and ($manifest[0].PSObject.Properties.Name -contains 'VmPathName')) {
+        $onTarget = @{}
+        foreach ($v in (Get-View -ViewType VirtualMachine -Property Name -Server $vc)) { $onTarget[$v.Name] = $true }
+        foreach ($n in $script:RegisteredNames) { $onTarget[$n] = $true }
+        # 期望集合：優先用 Unregister-VmFromOldVc 寫的 unregistered.csv（實際拔掉的那批），
+        # 沒有就用匯出清單裡 vmx 在這些 datastore 上的
+        $unregLog = Join-Path (Split-Path $PlacementCsv -Parent) 'unregistered.csv'
+        if (Test-Path $unregLog) {
+            $expected = @(Import-Csv $unregLog | Where-Object { $p = $_.VmPathName; $p -and ($Datastore | Where-Object { $p.StartsWith("[$_] ") }) })
+            $basis = 'unregistered.csv'
+        } else {
+            $expected = @($manifest | Where-Object { $p = $_.VmPathName; $p -and ($Datastore | Where-Object { $p.StartsWith("[$_] ") }) })
+            $basis = 'vm-placement.csv'
+        }
+        $pending = @($expected | Where-Object { -not $onTarget.ContainsKey($_.VMName) })
+        Write-Host "`n================ 對帳（$basis vs 目標端）================"
+        Write-Host ("  舊 vC 端位於 {0} 的 VM：{1} 台；目標端已有 {2} 台；還沒過來 {3} 台" -f ($Datastore -join ','), $expected.Count, ($expected.Count - $pending.Count), $pending.Count)
+        foreach ($m in $pending) {
+            Add-Result 'PendingOnSource' $m.VMName "$($m.VmPathName)"
+        }
+    }
+}
+
 # --- 總結 ---
 Write-Host "`n================ 結果 ================"
 foreach ($k in ($script:Stats.Keys | Sort-Object)) { Write-Host ("  {0,-20} {1,5}" -f $k, $script:Stats[$k]) }

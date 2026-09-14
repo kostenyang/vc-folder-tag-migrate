@@ -8,11 +8,37 @@
 | `Copy-VcCustomAttributes.ps1` | **一支搞定**：自訂屬性（定義 + 值）直接 A → B |
 | `Copy-VcFolders.ps1` | **一支搞定**：資料夾樹直接建到 B（可連 VM 一起放進去） |
 | `Copy-VcMeta.ps1` | 通用版直接 A → B，`-Include` 選要搬哪幾類 |
-| `Register-VmxFromDatastore.ps1` | 掃 datastore 把 vmx/vmtx 註冊回 B；加 `-SourceServer` 或 `-MetaDir` 就**照舊 vC 把資料夾 / 屬性 / Notes / tag 一起做好** |
+| `Unregister-VmFromOldVc.ps1` | 舊 vC 端：依匯出清單把 VM 移出 inventory（檔案留著），寫 `unregistered.csv` 給新 vC 對帳 |
+| `Register-VmxFromDatastore.ps1` | 新 vC 端：掃 datastore 把 vmx/vmtx 註冊回來；`-MetaDir` 就**照舊 vC 把資料夾 / 屬性 / Notes / tag 一起做好**，結尾**對帳**列出還沒過來的 |
+| `Move-VmToNewVc.ps1` | 兩台 vC **同時連得到**時用：每台「新 vC 先註冊 → 成功才從舊 vC 拿掉」，沒有看不到的空窗；可選自動關機 / 開機回答 moved |
 | `Export-VcMeta.ps1` / `Import-VcMeta.ps1` | 底層兩步式（先落 CSV、可人工編修、再匯入）；上面幾支都是包這兩支 |
 | `Test-VcMeta.ps1` / `Test-RegisterVmx.ps1` | 端到端自我測試（建測試物件 → 跑 → 獨立驗證 → 清除） |
 
-## 0. 最常用的三種情境
+## 0. 主線：datastore 搬家（兩台 vC 不必同時在線，中間靠落地檔）
+
+```
+舊 vC  ① Export-VcMeta.ps1            → export-A\      落地：資料夾 / VM 位置 / tag / 屬性 / Notes（這份 = 清單 = 真相源）
+舊 vC  ② Unregister-VmFromOldVc.ps1    → 依清單 unregister（開著的不動），寫 export-A\unregistered.csv
+       …datastore 卸載、搬到新 vC…（隔幾小時、幾天都可以）
+新 vC  ③ Register-VmxFromDatastore.ps1 -MetaDir export-A
+          → 註冊 + 放回原資料夾 + 屬性 + Notes + tag，結尾對帳：unregistered.csv 裡誰還沒過來
+```
+
+```bash
+pwsh -Command "& .\Export-VcMeta.ps1 -Server <舊vC> -User administrator@vsphere.local -Password '<pw>' -OutDir .\export-A -Folder 'Linux'"
+```
+```bash
+pwsh -Command "& .\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password '<pw>' -MetaDir .\export-A -Datastore ds01 -DryRun"
+```
+```bash
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap '<舊DC>=<新DC>' -DryRun"
+```
+
+- ② 的安全機制：沒有 ① 的匯出檔不給做；清單的 vmx 路徑要跟現在一致（防舊匯出檔）；開著的 VM 跳過（或 `-ShutdownFirst`）；不接受「全部」，要給 `-Datastore` / `-Folder` / `-VM`。
+- ③ 可以分批跑很多次，每次都會對帳；VM 看不到的那段時間，`unregistered.csv` 就是你的清單。
+- 兩台 vC 同時連得到、想完全沒有空窗 → 用 `Move-VmToNewVc.ps1`（見 §10）。
+
+## 0b. 只搬中繼資料（VM 已經在新 vC）
 
 **只搬自訂屬性**
 ```bash
@@ -24,13 +50,8 @@ pwsh -Command "& .\Copy-VcCustomAttributes.ps1 -SourceServer <舊vC> -SourcePass
 pwsh -Command "& .\Copy-VcFolders.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -MoveVMs -DryRun"
 ```
 
-**datastore 搬到新 vC 後，VM 註冊回來並照舊 vC 補齊資料夾 / 屬性 / Notes / tag**
-```bash
-pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -DryRun"
-```
 
-三個都先 `-DryRun` 看報告，確認後拿掉再跑。`-Folder 'Linux'` 可把任何一個縮到單一資料夾子樹。
-舊 vC 已經連不到？先前用 `Export-VcMeta` 匯出的目錄可用 `-MetaDir` 代替 `-SourceServer`。
+都先 `-DryRun` 看報告，確認後拿掉再跑。`-Folder 'Linux'` 可縮到單一資料夾子樹。
 
 ## 1. 匯出（來源 vCenter）
 
@@ -239,3 +260,26 @@ vC B   ④ Register-VmxFromDatastore.ps1 -MetaDir export-A -DatacenterMap 'A=B'
 | `Copy-VcMeta.ps1 -Include Tags,Notes` | 其他組合自己選 |
 
 共同參數：`-SourceServer/-SourceUser/-SourcePassword`、`-TargetServer/-TargetUser/-TargetPassword`、`-DatacenterMap`、`-Folder`、`-Datacenter`、`-DryRun`、`-WorkDir`。
+
+## 10. 兩台 vC 同時連得到：`Move-VmToNewVc.ps1`（零空窗交接）
+
+前提：VM 所在 datastore 兩邊都掛得到。每台 VM：確認關機（或 `-ShutdownFirst`）→ **新 vC 先註冊** → 成功才從舊 vC unregister（失敗就不動舊 vC）→ 放回原資料夾 + 屬性 + Notes + tag → `-PowerOnAfter` 在新 vC 開機並自動回答「I moved it」。匯出在一開始自動做（VM 還在舊 vC）。
+
+```bash
+pwsh -Command "& .\Move-VmToNewVc.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -Folder 'Linux' -TargetCluster cl01 -DatacenterMap '<舊DC>=<新DC>' -DryRun"
+```
+
+實機驗證（2026-09-14）：`zz-real-vm03` 從 vC A `ZZ-Real/Sub` 交接到 vC B，Moved → 開機 → 屬性 / tag / 資料夾一致，舊 vC 上已不存在。
+
+## 11. 落地三段式實機驗證（2026-09-14）
+
+| 步驟 | 動作 | 結果 |
+|---|---|---|
+| ① 舊 vC | 兩台 VM（vm02 故意開著）`Export -Folder ZZ-Real` | 8 個 CSV，`vm-placement.csv` 帶 vmx 路徑與電源狀態 |
+| ② 舊 vC | `Unregister -Datastore vc-migtest -DryRun` | vm01 WouldUnregister、**vm02 SkippedPoweredOn** |
+| ② 舊 vC | 關掉 vm02 後正式跑 | 2 台 Unregistered，`unregistered.csv` 2 筆 |
+| ③ 新 vC | `Register -MetaDir -Include zz-real-vm01`（故意只做一台） | vm01 註冊 + 資料夾 + 屬性 + tag；**對帳：還沒過來 1 台 = vm02** |
+| ③ 新 vC | 再跑一次不篩 | vm01 AlreadyRegistered、vm02 註冊補齊；對帳 0 台 |
+| 核對 | 兩台在 `ZZ-Real/Sub`，屬性 / Notes / tag 與舊 vC 一致，PoweredOff | ✅ |
+
+實跑抓到並修掉的 bug：PowerShell `-like "[ds] *"` 會把 `[ds]` 當字元集合 wildcard，datastore 篩選全部落空 → 改 `StartsWith`。
