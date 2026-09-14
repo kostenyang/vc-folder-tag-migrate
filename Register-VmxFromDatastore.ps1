@@ -1,28 +1,26 @@
 <#
 .SYNOPSIS
-  掃指定 datastore 裡的 .vmx / .vmtx，把還沒在 inventory 裡的 VM / 範本註冊回 vCenter。
+  把 VM / 範本註冊回新 vCenter 的 inventory，並直接放進原資料夾。兩種模式：
 
-  典型用途：datastore 從 vCenter A 搬到 vCenter B 後，VM 檔案都在、但 inventory 是空的。
-  註冊完再用 Import-VcMeta.ps1 補資料夾 / tag / 自訂屬性 / Notes。
+  模式 B（主線）-UnregisteredCsv：依 Unregister-VmFromOldVc 產生的 unregistered.csv 逐台註冊。
+    精確只註冊「舊 vC 拔掉的那批」，vmx 路徑、名稱、原資料夾都從 CSV 來；CSV 可先用 Excel 改再跑。
+  模式 A -Datastore：掃 datastore 上所有 .vmx / .vmtx，還沒在 inventory 的都註冊（孤兒清理、沒有 CSV 時用）。
+
+  結尾對帳：CSV（或匯出清單）裡還沒出現在新 vC 的 VM 列成 PendingOnSource。
+  已註冊的依 [datastore] 路徑比對一律跳過，重跑安全；.vmtx 註冊成範本；只註冊、不開機。
 
 .EXAMPLE
-  # 先看會註冊哪些（不寫入）
-  ./Register-VmxFromDatastore.ps1 -Server <vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -DryRun
+  # 主線：先看
+  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Cluster cl01 -UnregisteredCsv .\export-A\unregistered.csv -DryRun
 
-  # 正式註冊，並依 vm-placement.csv 直接放進對應資料夾
-  ./Register-VmxFromDatastore.ps1 -Server <vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv
+  # 主線：正式（註冊 + 放進原資料夾）
+  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Cluster cl01 -UnregisteredCsv .\export-A\unregistered.csv
 
-  # 照舊 vC 一次做好：註冊 + 放回原資料夾 + 自訂屬性 + Notes + tag（直接連舊 vC 抓；VM 要還在舊 vC 的 inventory）
-  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 `
-      -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap 'DC-A=DC-B'
+  # 掃 datastore（沒有 CSV 時）
+  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv -DryRun
 
-  # 建議做法：先在舊 vC 跑 Export-VcMeta、再 unregister，註冊時用匯出目錄（unregister 後舊 vC 就沒有 tag/屬性值了）
-  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap 'DC-A=DC-B'
-
-.NOTES
-  - 已註冊的 vmx（依 [datastore] 路徑比對）一律跳過，重複跑安全。
-  - .vmtx 會註冊成範本（-NoTemplates 可略過）。
-  - 只註冊、不開機。開機時 vSphere 若問「moved / copied」要另外回答。
+  # 可選：把「補屬性 / Notes / tag」併進來一次做（主線是分開跑 Import-VcMeta）
+  ./Register-VmxFromDatastore.ps1 ... -UnregisteredCsv .\export-A\unregistered.csv -MetaDir .\export-A -DatacenterMap 'DC-A=DC-B'
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +29,8 @@ param(
     [string]$Password,
     [pscredential]$Credential,
 
-    [Parameter(Mandatory)][string[]]$Datastore,
+    [string[]]$Datastore,              # 模式 A：掃這些 datastore 上的 vmx/vmtx
+    [string]$UnregisteredCsv,          # 模式 B（主線）：依 Unregister-VmFromOldVc 產生的 unregistered.csv 逐台註冊，直接放進原資料夾
     [string]$Cluster,                  # 註冊到這個叢集（挑有掛該 datastore 的主機，輪流用）
     [string]$VMHost,                   # 或指定單一主機
     [string]$ResourcePool,             # 預設用主機所屬叢集 / 主機的根 resource pool
@@ -57,6 +56,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Datastore -and -not $UnregisteredCsv) { throw "要給 -UnregisteredCsv（主線）或 -Datastore（掃 datastore）其中一個" }
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
 $enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
 if (-not $ReportPath) { $ReportPath = Join-Path (Get-Location) ('register-report-{0:yyyyMMdd-HHmmss}.csv' -f (Get-Date)) }
@@ -166,7 +166,82 @@ if ($PlacementCsv) {
 }
 
 # =====================================================================
-foreach ($dsName in $Datastore) {
+# 模式 B：依 unregistered.csv 逐台註冊（主線）
+# =====================================================================
+$csvRows = @()
+if ($UnregisteredCsv) {
+    $UnregisteredCsv = (Resolve-Path $UnregisteredCsv).Path
+    $csvRows = @(Import-Csv $UnregisteredCsv)
+    if (-not $csvRows.Count) { throw "$UnregisteredCsv 是空的" }
+    foreach ($col in 'VMName','VmPathName') { if ($csvRows[0].PSObject.Properties.Name -notcontains $col) { throw "$UnregisteredCsv 缺 $col 欄位" } }
+    $hasFolder = $csvRows[0].PSObject.Properties.Name -contains 'FolderPath'
+    $CreateFolders = $true
+    Write-Host "`n=== 依 $(Split-Path $UnregisteredCsv -Leaf) 註冊 $($csvRows.Count) 台 ==="
+    $dsCache = @{}; $hostCache = @{}; $poolCache = @{}; $rr = @{}
+    # 對帳用：這份 CSV 涵蓋到的 datastore
+    $Datastore = @($csvRows | ForEach-Object { ($_.VmPathName -replace '^\[([^\]]+)\].*$', '$1') } | Sort-Object -Unique)
+
+    foreach ($row in $csvRows) {
+        $vmx = $row.VmPathName
+        if ([string]::IsNullOrWhiteSpace($vmx)) { Add-Result 'SkippedNoPath' $row.VMName; continue }
+        if ($registered.ContainsKey($vmx.ToLower())) { Add-Result 'AlreadyRegistered' $vmx; continue }
+        if (-not (Test-NameMatch $row.VMName)) { Add-Result 'Filtered' $vmx; continue }
+        $isTpl = ($row.IsTemplate -eq 'True')
+        if ($isTpl -and $NoTemplates) { Add-Result 'SkippedTemplate' $vmx; continue }
+        $dsName = ($vmx -replace '^\[([^\]]+)\].*$', '$1')
+
+        if (-not $dsCache.ContainsKey($dsName)) {
+            $dsObj = Get-Datastore -Name $dsName -Server $vc -ErrorAction SilentlyContinue
+            $dsCache[$dsName] = $dsObj
+            $hs = @()
+            if ($dsObj) {
+                $hs = @($dsObj | Get-VMHost -Server $vc | Where-Object { $_.ConnectionState -eq 'Connected' })
+                if ($Cluster) { $hs = @($hs | Where-Object { $_.Parent.Name -eq $Cluster }) }
+                if ($VMHost)  { $hs = @($hs | Where-Object { $_.Name -eq $VMHost }) }
+            }
+            $hostCache[$dsName] = $hs; $rr[$dsName] = 0
+            foreach ($h in $hs) {
+                $poolCache[$h.Name] = if ($ResourcePool) {
+                    $rp = Get-ResourcePool -Name $ResourcePool -Location $h.Parent -Server $vc -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if (-not $rp) { throw "找不到 resource pool '$ResourcePool'（在 $($h.Parent.Name) 下）" }
+                    $rp.ExtensionData.MoRef
+                } else { (Get-View $h.ExtensionData.Parent -Property ResourcePool -Server $vc).ResourcePool }
+            }
+            if ($hs.Count) { Write-Host "  datastore $dsName → 主機: $($hs.Name -join ', ')" }
+        }
+        $dsObj = $dsCache[$dsName]; $hs = $hostCache[$dsName]
+        if (-not $dsObj) { Add-Result 'DatastoreNotFound' $vmx "新 vC 沒有 datastore '$dsName'（還沒掛？）"; continue }
+        if (-not $hs.Count) { Add-Result 'NoHost' $vmx "沒有可用主機掛著 $dsName（Cluster=$Cluster VMHost=$VMHost）"; continue }
+        $h = $hs[$rr[$dsName] % $hs.Count]; $rr[$dsName]++
+
+        $dc = $dsObj.Datacenter
+        $fp = if ($hasFolder) { $row.FolderPath } else { $Folder }
+        $dest = Resolve-VmFolder $dc $fp -Create:$CreateFolders
+        $kind = if ($isTpl) { 'Template' } else { 'VM' }
+        if ($DryRun) {
+            [void]$script:RegisteredNames.Add($row.VMName)
+            Add-Result 'WouldRegister' $vmx "$kind '$($row.VMName)' -> host=$($h.Name) folder=$(if ($fp) { $fp } else { '(DC 根)' })"
+            continue
+        }
+        if (-not $dest) { Add-Result 'FolderNotFound' $vmx $fp; continue }
+        try {
+            $fv = Get-View $dest.ExtensionData.MoRef -Server $vc
+            $pool = if ($isTpl) { $null } else { $poolCache[$h.Name] }
+            $vmRef = $fv.RegisterVM($vmx, $row.VMName, $isTpl, $pool, $h.ExtensionData.MoRef)   # 直接註冊進目的資料夾
+            $registered[$vmx.ToLower()] = $true
+            [void]$script:RegisteredNames.Add($row.VMName)
+            Add-Result 'Registered' $vmx "$kind '$($row.VMName)' on $($h.Name) -> $(if ($fp) { $fp } else { '(DC 根)' })"
+        } catch {
+            Add-Result 'Failed' $vmx ($_.Exception.Message -split "`n")[0]
+        }
+    }
+    if (-not $PlacementCsv) { $PlacementCsv = $UnregisteredCsv }   # 對帳用
+}
+
+# =====================================================================
+# 模式 A：掃 datastore
+# =====================================================================
+foreach ($dsName in ($(if ($UnregisteredCsv) { @() } else { $Datastore }))) {
     Write-Host "`n=== Datastore: $dsName ==="
     $ds = Get-Datastore -Name $dsName -Server $vc
     $dc = $ds.Datacenter

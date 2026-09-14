@@ -7,7 +7,7 @@
     - 沒有 -MetaDir（先跑過 Export-VcMeta）不給做 —— unregister 之後 tag 指派 / 屬性值就沒了
     - 清單裡的 vmx 路徑要跟現在一致（確保匯出檔不是舊的）
     - 開機中的 VM 不動（或 -ShutdownFirst）
-    - 每台寫進 <MetaDir>\unregistered.csv（名稱 / vmx / 時間），新 vC 端對帳用
+    - 每台寫進 <MetaDir>\unregistered.csv（名稱 / vmx / 原資料夾 / 時間）——這份就是下一步\n      Register-VmxFromDatastore -UnregisteredCsv 的輸入，可先用 Excel 改（例如改目的資料夾）再註冊
 
 .EXAMPLE
   # 把 ds01 上、清單裡的 VM 全部 unregister（先看）
@@ -129,7 +129,11 @@ foreach ($r in $picked) {
     try {
         if ($isTpl) { Remove-Template -Template $o -Confirm:$false -Server $vc } else { Remove-VM -VM $o -Confirm:$false -Server $vc }
         Add-Result 'Unregistered' $r.VMName $curVmx
-        [void]$done.Add([pscustomobject]@{ Time = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); VMName = $r.VMName; IsTemplate = $isTpl; VmPathName = $curVmx; FolderPath = $r.FolderPath; InstanceUuid = $r.InstanceUuid; Server = $Server })
+        [void]$done.Add([pscustomobject]@{
+            Time = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); VMName = $r.VMName; IsTemplate = $isTpl
+            VmPathName = $curVmx; Datacenter = $r.Datacenter; FolderPath = $r.FolderPath
+            InstanceUuid = $r.InstanceUuid; VMHost = $r.VMHost; Cluster = $r.Cluster; Server = $Server
+        })
     } catch {
         Add-Result 'FailedUnregister' $r.VMName ($_.Exception.Message -split "`n")[0]
     }

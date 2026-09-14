@@ -86,7 +86,7 @@ c.push(...tbl(['腳本', '在哪跑', '用途'], [
   ['Export-VcMeta.ps1', '舊 vC', '動 0：匯出資料夾樹、VM 位置、tag、自訂屬性、Notes 成 8 個 CSV'],
   ['Import-VcMeta.ps1', '新 vC', '動 1 / 2 / 5：把 CSV 匯入（-Include 選要做哪幾類）'],
   ['Unregister-VmFromOldVc.ps1', '舊 vC', '動 3：依清單把 VM 移出 inventory（檔案留著），寫 unregistered.csv'],
-  ['Register-VmxFromDatastore.ps1', '新 vC', '動 4：掃 datastore 把 vmx / vmtx 註冊回來、放進資料夾、對帳'],
+  ['Register-VmxFromDatastore.ps1', '新 vC', '動 4：依動 3 產生的 unregistered.csv 逐台註冊回來、直接放進原資料夾、對帳（也可掃整顆 datastore）'],
   ['Copy-VcMeta.ps1 / Copy-VcCustomAttributes.ps1 / Copy-VcFolders.ps1', '任一台', '兩台 vC 同時連得到時的一支到底版（內部就是 Export → Import）'],
   ['Test-VcMeta.ps1 / Test-RegisterVmx.ps1', '—', '端到端自我測試：建測試物件 → 跑 → 獨立驗證 → 清除'],
 ], [3.2, 1.2, 6]));
@@ -108,16 +108,16 @@ c.push(...tbl(['動', '在哪', '腳本', '做什麼'], [
   ['0', '舊 vC', 'Export-VcMeta', '一次落地全部：資料夾 / VM 位置 / tag / 屬性 / Notes → export-A\\'],
   ['1', '新 vC', 'Import-VcMeta -Include Folders', '資料夾樹先建好'],
   ['2', '新 vC', 'Import-VcMeta -Include CustomAttributes,Tags', '屬性定義、tag 分類 / 標籤先建好（VM 還沒過去，值和指派先不會有）'],
-  ['3', '舊 vC', 'Unregister-VmFromOldVc', 'VM 移出舊 vC，寫 export-A\\unregistered.csv'],
+  ['3', '舊 vC', 'Unregister-VmFromOldVc', 'VM 移出舊 vC，產生新 CSV export-A\\unregistered.csv（誰 / vmx / 原資料夾）'],
   ['—', '儲存', '（人工）', 'datastore 卸載、搬到新 vC、掛上主機。隔多久都可以'],
-  ['4', '新 vC', 'Register-VmxFromDatastore -PlacementCsv', '只註冊、放進動 1 的資料夾；結尾對帳：unregistered.csv 裡誰還沒過來'],
+  ['4', '新 vC', 'Register-VmxFromDatastore -UnregisteredCsv', '依新 CSV 逐台註冊、直接放進原資料夾；結尾對帳：誰還沒過來'],
   ['5', '新 vC', 'Import-VcMeta -Include CustomAttributes,Notes,Tags', '補 VM 的屬性值 / Notes / tag 指派（VM 已在，全部對得到）'],
 ], [0.6, 1, 3.6, 5.2]));
 c.push(H2('3.1 為什麼是這個順序'));
 c.push(B([bold('動 0 必須在動 3 之前。'), t('VM 一 unregister，舊 vC 上它的 tag 指派、屬性值就消失了；匯出檔是唯一的來源。動 3 的腳本沒有匯出檔不給做。')]));
 c.push(B([bold('動 1、2 可以提早做。'), t('資料夾、屬性定義、tag 分類都是 vCenter 層物件，跟 VM 無關，VM 過去之前就能備妥；動 4 註冊時資料夾已經在。')]));
 c.push(B([bold('動 2 和動 5 是同一支腳本跑兩次。'), t('第一次建定義（值對不到 VM 是預期），第二次補值和指派。這是 vCenter 的限制——值要掛在物件上——不是腳本的。')]));
-c.push(B([bold('動 4 可以分批。'), t('每次結尾都拿 unregistered.csv 對帳，直接列出還沒過來的 VM。')]));
+c.push(B([bold('動 4 的輸入是動 3 產生的新 CSV。'), t('unregistered.csv 精確記錄拔掉的那批（vmx 路徑 / 名稱 / 原資料夾），註冊就照它做、不去猜；可以先用 Excel 改再跑。可以分批，每次結尾都對帳。')]));
 c.push(H2('3.2 完整指令（把 <…> 換成你的）'));
 c.push(...CB([
   '# 動 0（舊 vC）',
@@ -130,10 +130,10 @@ c.push(...CB([
   'pwsh -Command "& .\\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere.local -Password \'<pw>\' -InDir .\\export-A -DatacenterMap \'<舊DC>=<新DC>\' -Include CustomAttributes,Tags"',
   '',
   '# 動 3（舊 vC）',
-  'pwsh -Command "& .\\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password \'<pw>\' -MetaDir .\\export-A -Datastore ds01"',
+  'pwsh -Command "& .\\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password \'<pw>\' -MetaDir .\\export-A -Cluster cl01 -Datastore ds01"',
   '',
   '# 動 4（新 vC）',
-  'pwsh -Command "& .\\Register-VmxFromDatastore.ps1 -Server <新vC> -User administrator@vsphere.local -Password \'<pw>\' -Datastore ds01 -Cluster cl01 -PlacementCsv .\\export-A\\vm-placement.csv"',
+  'pwsh -Command "& .\\Register-VmxFromDatastore.ps1 -Server <新vC> -User administrator@vsphere.local -Password \'<pw>\' -Cluster cl01 -UnregisteredCsv .\\export-A\\unregistered.csv"',
   '',
   '# 動 5（新 vC）',
   'pwsh -Command "& .\\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere.local -Password \'<pw>\' -InDir .\\export-A -DatacenterMap \'<舊DC>=<新DC>\' -Include CustomAttributes,Notes,Tags"',
@@ -194,19 +194,18 @@ c.push(B('同名多台跳過（SkippedAmbiguous）；不接受「全部」，一
 c.push(B([t('每台成功 unregister 的都追加到 '), mono('<MetaDir>\\unregistered.csv'), t('（名稱 / vmx / 時間 / 原資料夾 / UUID），這就是動 4 對帳的依據。')]));
 
 c.push(H2('4.4 動 4：Register-VmxFromDatastore.ps1（新 vC）'));
-c.push(P('掃指定 datastore 的 .vmx / .vmtx，把還沒在 inventory 裡的註冊回來；.vmtx 註冊成範本；只註冊、不開機。已註冊的依「[datastore] 路徑」比對一律跳過，重跑安全。'));
+c.push(P('主線用 -UnregisteredCsv：依動 3 產生的 unregistered.csv 逐台註冊，vmx 路徑、名稱、是否範本、原資料夾都從 CSV 來，註冊時直接放進原資料夾（資料夾由動 1 建好，缺的會自動建）。只註冊、不開機；.vmtx 註冊成範本；已註冊的依「[datastore] 路徑」比對一律跳過，重跑安全。'));
 c.push(...tbl(['參數', '說明'], [
-  ['-Datastore', '可多個'],
+  ['-UnregisteredCsv', '動 3 產生的 export-A\\unregistered.csv（主線）。可先用 Excel 改 FolderPath 等欄位再跑'],
   ['-Cluster / -VMHost', '註冊到哪：叢集內有掛該 datastore 的主機輪流用，或指定單一主機'],
   ['-ResourcePool', '預設用主機所屬叢集 / 主機的根 resource pool'],
-  ['-PlacementCsv', '動 0 的 vm-placement.csv：註冊完依 VMName 放進原資料夾（資料夾要先由動 1 建好；沒有時加 -CreateFolders 自動建）'],
+  ['-Datastore ds01 -PlacementCsv ...', '另一種模式：掃整顆 datastore 的 .vmx / .vmtx，依 vm-placement.csv 放資料夾（沒有 CSV、清孤兒時用）'],
   ['-Include / -Exclude', '名稱 wildcard；預設排除 vCLS*'],
   ['-NoTemplates', '略過 .vmtx'],
-  ['-NameFromFile', '用檔名當 VM 名稱；預設抓 vmx 內的 displayName，讀不到才用檔名'],
   ['-MetaDir / -DatacenterMap', '（可選）把動 5 併進來一次做；主線不用'],
-  ['-DryRun', '只掃描、不註冊'],
+  ['-DryRun', '只檢查、不註冊'],
 ], [3.2, 7.2]));
-c.push(P([bold('對帳：'), t('結尾拿 unregistered.csv（沒有就用 vm-placement.csv 依 datastore 篩）比對新 vC，列出 PendingOnSource——舊 vC 拔掉了、但新 vC 還沒有的。分批跑每次都會報，DryRun 會加註「這次會註冊幾台、跑完剩幾台」。')]));
+c.push(P([bold('對帳：'), t('結尾拿 unregistered.csv 比對新 vC，列出 PendingOnSource——舊 vC 拔掉了、但新 vC 還沒有的。分批跑每次都會報，DryRun 會加註「這次會註冊幾台、跑完剩幾台」。')]));
 c.push(note('開機時 vSphere 若詢問「moved / copied」，回答 I moved it；腳本不代答，也不開機。'));
 
 c.push(H2('4.5 動 5：Import-VcMeta.ps1 -Include CustomAttributes,Notes,Tags（新 vC）'));
@@ -347,30 +346,28 @@ c.push(...CB([
   '"2026-09-14 15:42:47","zz-real-vm02","False","[vc-migtest] zz-real-vm02/zz-real-vm02.vmx","ZZ-Real/Sub","503f4f6e-...","10.0.0.101"',
 ], 'EEF3FB'));
 
-c.push(H2('7.6 動 4：新 vC 註冊（含分批對帳）'));
-c.push(P('先只註冊 vm01，模擬分批；再 DryRun 看對帳是否正確指出 vm02 還沒過來：'));
+c.push(H2('7.6 動 4：新 vC 依新 CSV 註冊'));
+c.push(P('另一輪實測（同環境，多加一個範本 zz-real-tpl01）：動 3 用 -Cluster Cluster -Datastore vc-migtest 交集篩出 3 台並產生 unregistered.csv，動 4 直接吃它：'));
 c.push(...CB([
-  '> Register-VmxFromDatastore.ps1 -Server 10.0.1.19 -Datastore vc-migtest -VMHost vcd-esx01.home.lab -PlacementCsv export-A\\vm-placement.csv -DryRun',
-  '[*] inventory 目前有 17 台 VM/範本',
-  '[*] placement 對照 2 筆',
-  '=== Datastore: vc-migtest ===',
-  '  主機: vcd-esx01.home.lab',
-  '  找到 2 個 vmx/vmtx',
-  '  [ ] AlreadyRegistered [vc-migtest] zz-real-vm01/zz-real-vm01.vmx',
+  '> Register-VmxFromDatastore.ps1 -Server 10.0.1.19 -VMHost vcd-esx01.home.lab -UnregisteredCsv export-B\\unregistered.csv -DryRun',
+  '=== 依 unregistered.csv 註冊 3 台 ===',
+  '  datastore vc-migtest → 主機: vcd-esx01.home.lab',
+  '  [~] WouldRegister  [vc-migtest] zz-real-tpl01/zz-real-tpl01.vmtx  Template \'zz-real-tpl01\' -> host=vcd-esx01.home.lab folder=ZZ-Real/Sub',
+  '  [~] WouldRegister  [vc-migtest] zz-real-vm01/zz-real-vm01.vmx  VM \'zz-real-vm01\' -> host=vcd-esx01.home.lab folder=ZZ-Real/Sub',
   '  [~] WouldRegister  [vc-migtest] zz-real-vm02/zz-real-vm02.vmx  VM \'zz-real-vm02\' -> host=vcd-esx01.home.lab folder=ZZ-Real/Sub',
   '================ 對帳（unregistered.csv vs 目標端）================',
-  '  舊 vC 端位於 vc-migtest 的 VM：2 台；目標端已有 1 台；還沒過來 1 台（這次會註冊 1 台，跑完剩 0 台）',
-  '  [ ] PendingOnSource zz-real-vm02  [vc-migtest] zz-real-vm02/zz-real-vm02.vmx',
+  '  舊 vC 端位於 vc-migtest 的 VM：3 台；目標端已有 0 台；還沒過來 3 台（這次會註冊 3 台，跑完剩 0 台）',
 ]));
 c.push(P('正式跑：'));
 c.push(...CB([
-  '> Register-VmxFromDatastore.ps1 ... -PlacementCsv export-A\\vm-placement.csv',
-  '  [ ] AlreadyRegistered [vc-migtest] zz-real-vm01/zz-real-vm01.vmx',
-  '  [+] Registered     [vc-migtest] zz-real-vm02/zz-real-vm02.vmx  VM \'zz-real-vm02\' on vcd-esx01.home.lab',
-  '  [ ] Placed         zz-real-vm02  ZZ-Real/Sub',
+  '> Register-VmxFromDatastore.ps1 ... -UnregisteredCsv export-B\\unregistered.csv',
+  '  [+] Registered     [vc-migtest] zz-real-tpl01/zz-real-tpl01.vmtx  Template \'zz-real-tpl01\' on vcd-esx01.home.lab -> ZZ-Real/Sub',
+  '  [+] Registered     [vc-migtest] zz-real-vm01/zz-real-vm01.vmx  VM \'zz-real-vm01\' on vcd-esx01.home.lab -> ZZ-Real/Sub',
+  '  [+] Registered     [vc-migtest] zz-real-vm02/zz-real-vm02.vmx  VM \'zz-real-vm02\' on vcd-esx01.home.lab -> ZZ-Real/Sub',
   '================ 對帳（unregistered.csv vs 目標端）================',
-  '  舊 vC 端位於 vc-migtest 的 VM：2 台；目標端已有 2 台；還沒過來 0 台',
+  '  舊 vC 端位於 vc-migtest 的 VM：3 台；目標端已有 3 台；還沒過來 0 台',
 ]));
+c.push(P('新 vC 獨立查詢：三個物件都在 ZZ-Real/Sub，範本仍是範本（Type=Template），兩台 VM 動 5 之後屬性與 tag 到位；舊 vC 已無 zz-real-*。'));
 
 c.push(H2('7.7 動 5：新 vC 補屬性值 / Notes / tag'));
 c.push(...CB([

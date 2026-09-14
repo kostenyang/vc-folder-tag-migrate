@@ -9,7 +9,7 @@
 | `Copy-VcFolders.ps1` | **一支搞定**：資料夾樹直接建到 B（可連 VM 一起放進去） |
 | `Copy-VcMeta.ps1` | 通用版直接 A → B，`-Include` 選要搬哪幾類 |
 | `Unregister-VmFromOldVc.ps1` | 動 3（舊 vC）：依匯出清單把 VM 移出 inventory（檔案留著），寫 `unregistered.csv` 給新 vC 對帳 |
-| `Register-VmxFromDatastore.ps1` | 動 4（新 vC）：掃 datastore 把 vmx/vmtx 註冊回來，`-PlacementCsv` 放進動 1 建好的資料夾，結尾**對帳**列出還沒過來的 |
+| `Register-VmxFromDatastore.ps1` | 動 4（新 vC）：依動 3 產生的 `unregistered.csv` 逐台註冊回來、直接放進原資料夾，結尾**對帳**列出還沒過來的（也可 `-Datastore` 掃整顆） |
 | `Export-VcMeta.ps1` / `Import-VcMeta.ps1` | 底層兩步式（先落 CSV、可人工編修、再匯入）；上面幾支都是包這兩支 |
 | `Test-VcMeta.ps1` / `Test-RegisterVmx.ps1` | 端到端自我測試（建測試物件 → 跑 → 獨立驗證 → 清除） |
 
@@ -19,9 +19,9 @@
 動 0  舊 vC   Export-VcMeta.ps1                                      → export-A\   一次落地全部：資料夾 / VM 位置 / tag / 屬性 / Notes
 動 1  新 vC   Import-VcMeta.ps1 -Include Folders                     資料夾樹先建好
 動 2  新 vC   Import-VcMeta.ps1 -Include CustomAttributes,Tags       屬性定義、tag 分類/標籤先建好（VM 還沒過去，值/指派先不會有）
-動 3  舊 vC   Unregister-VmFromOldVc.ps1                             VM 移出舊 vC，寫 export-A\unregistered.csv
+動 3  舊 vC   Unregister-VmFromOldVc.ps1                             VM 移出舊 vC，產生新 CSV：export-A\unregistered.csv（誰 / vmx / 原資料夾）
        …datastore 卸載、搬到新 vC…（隔多久都可以，清單在 export-A\）
-動 4  新 vC   Register-VmxFromDatastore.ps1 -PlacementCsv            只註冊、放進動 1 的資料夾，結尾對帳：unregistered.csv 裡誰還沒過來
+動 4  新 vC   Register-VmxFromDatastore.ps1 -UnregisteredCsv         依新 CSV 逐台註冊、直接放進原資料夾，結尾對帳：誰還沒過來
 動 5  新 vC   Import-VcMeta.ps1 -Include CustomAttributes,Notes,Tags 補 VM 的屬性值 / Notes / tag 指派（VM 已在，全部對得到）
 ```
 
@@ -39,11 +39,11 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere
 ```
 ```bash
 # 動 3（舊 vC）
-pwsh -Command "& .\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password '<pw>' -MetaDir .\export-A -Datastore ds01"
+pwsh -Command "& .\Unregister-VmFromOldVc.ps1 -Server <舊vC> -Password '<pw>' -MetaDir .\export-A -Cluster cl01 -Datastore ds01"
 ```
 ```bash
 # 動 4（新 vC）
-pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv"
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -User administrator@vsphere.local -Password '<pw>' -Cluster cl01 -UnregisteredCsv .\export-A\unregistered.csv"
 ```
 ```bash
 # 動 5（新 vC）
@@ -54,7 +54,8 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere
 - 動 1 / 2 在 VM 過去前就能做完，動 4 註冊時資料夾已經在；動 2 此時只建定義，VM 的值 / 指派等動 5。
 - 動 3 的篩選：`-Datastore` / `-Cluster` / `-VMHost` / `-Folder` / `-VM`，可以同時給，**取交集**（例 `-Cluster cl01 -Datastore ds01` = cl01 裡且在 ds01 上的）。
 - 動 3 的安全機制：沒有動 0 的匯出檔不給做；清單 vmx 路徑要跟現在一致；開著的跳過（`-ShutdownFirst` 可關）；不接受「全部」。
-- 動 4 可分批跑很多次，每次都對帳；VM 看不到的那段時間，`unregistered.csv` 就是清單。
+- 動 4 的輸入就是動 3 產生的 `unregistered.csv`：精確只註冊拔掉的那批，vmx 路徑 / 名稱 / 原資料夾都在裡面；**可以先用 Excel 改**（例如改目的資料夾）再跑。可分批跑很多次，每次都對帳。
+- 沒有 CSV（例如清孤兒）才用 `-Datastore ds01 -PlacementCsv ...` 掃整顆 datastore。
 - 動 4 的 `-MetaDir` 可以把動 5 併進去一次做（可選，不是主線）。
 
 ## 0b. 只搬中繼資料（VM 已經在新 vC）
