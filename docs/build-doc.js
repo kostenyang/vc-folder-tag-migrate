@@ -14,8 +14,9 @@ const PAGE_W = 11906, MARGIN = 1134, CONTENT_W = PAGE_W - 2 * MARGIN; // A4, 2cm
 // ---------- helpers ----------
 const t = (text, opts = {}) => new TextRun({ text, font: FONT, size: 20, ...opts });
 const P = (text, opts = {}) => new Paragraph({ children: Array.isArray(text) ? text : [t(text)], spacing: { after: 120 }, ...opts });
-const H1 = (text) => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [t(text, { size: 32, bold: true })], spacing: { before: 360, after: 160 } });
-const H2 = (text) => new Paragraph({ heading: HeadingLevel.HEADING_2, children: [t(text, { size: 26, bold: true })], spacing: { before: 280, after: 120 } });
+const TOC = [];
+const H1 = (text) => { TOC.push([1, text]); return new Paragraph({ heading: HeadingLevel.HEADING_1, children: [t(text, { size: 32, bold: true })], spacing: { before: 360, after: 160 } }); };
+const H2 = (text) => { TOC.push([2, text]); return new Paragraph({ heading: HeadingLevel.HEADING_2, children: [t(text, { size: 26, bold: true })], spacing: { before: 280, after: 120 } }); };
 const H3 = (text) => new Paragraph({ heading: HeadingLevel.HEADING_3, children: [t(text, { size: 22, bold: true })], spacing: { before: 200, after: 100 } });
 const B = (text) => new Paragraph({ numbering: { reference: 'bul', level: 0 }, children: Array.isArray(text) ? text : [t(text)], spacing: { after: 60 } });
 const N = (text) => new Paragraph({ numbering: { reference: 'num', level: 0 }, children: Array.isArray(text) ? text : [t(text)], spacing: { after: 60 } });
@@ -70,7 +71,7 @@ c.push(new Paragraph({ children: [new PageBreak()] }));
 
 // 目錄
 c.push(new Paragraph({ children: [t('目錄', { size: 28, bold: true })], spacing: { after: 200 } }));
-c.push(new TableOfContents('目錄', { hyperlink: true, headingStyleRange: '1-2' }));
+const TOC_AT = c.length; c.push(null);
 c.push(new Paragraph({ children: [new PageBreak()] }));
 
 // 1 概述
@@ -426,6 +427,10 @@ c.push(...tbl(['坑', '現象', '處理'], [
 ], [2.4, 4, 4]));
 c.push(P(''));
 c.push(P([t('原始碼與 README：'), mono('https://github.com/kostenyang/vc-folder-tag-migrate')]));
+
+// static TOC (LibreOffice 不會更新欄位，直接寫死)
+const tocParas = TOC.map(([lvl, txt]) => new Paragraph({ children: [t(txt, { size: lvl === 1 ? 21 : 19, bold: lvl === 1 })], indent: { left: lvl === 1 ? 0 : 480 }, spacing: { after: lvl === 1 ? 80 : 40, before: lvl === 1 ? 120 : 0 } }));
+c.splice(TOC_AT, 1, ...tocParas);
 
 // ---------- document ----------
 const doc = new Document({
