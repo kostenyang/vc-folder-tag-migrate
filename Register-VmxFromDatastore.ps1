@@ -12,11 +12,11 @@
   # 正式註冊，並依 vm-placement.csv 直接放進對應資料夾
   ./Register-VmxFromDatastore.ps1 -Server <vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv
 
-  # 照舊 vC 一次做好：註冊 + 放回原資料夾 + 自訂屬性 + Notes + tag（直接連舊 vC 抓）
+  # 照舊 vC 一次做好：註冊 + 放回原資料夾 + 自訂屬性 + Notes + tag（直接連舊 vC 抓；VM 要還在舊 vC 的 inventory）
   ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 `
       -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap 'DC-A=DC-B'
 
-  # 同上，但舊 vC 已經連不到了，用之前 Export-VcMeta 匯出的目錄
+  # 建議做法：先在舊 vC 跑 Export-VcMeta、再 unregister，註冊時用匯出目錄（unregister 後舊 vC 就沒有 tag/屬性值了）
   ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap 'DC-A=DC-B'
 
 .NOTES
@@ -41,10 +41,10 @@ param(
     [switch]$CreateFolders,            # 資料夾不存在就建
 
     # --- 照舊 vC 把資料夾 / 自訂屬性 / Notes / tag 一起做好（二選一）---
-    [string]$SourceServer,             # 直接連舊 vC 抓（會先跑 Export-VcMeta 到 -MetaDir）
+    [string]$SourceServer,             # 直接連舊 vC 抓（會先跑 Export-VcMeta 到 -MetaDir）；VM 必須還在舊 vC inventory 裡才抓得到
     [string]$SourceUser = 'administrator@vsphere.local',
     [string]$SourcePassword,
-    [string]$MetaDir,                  # 或給已經匯出好的目錄（Export-VcMeta 的 -OutDir）
+    [string]$MetaDir,                  # 或給已經匯出好的目錄（Export-VcMeta 的 -OutDir）—— 建議走這條：先匯出再 unregister
     [string[]]$DatacenterMap,          # 舊=新 DC 名稱對應，例 'DC-A=DC-B'
     [string[]]$SourceDatacenter,       # 只從舊 vC 抓這些 Datacenter
 

@@ -200,15 +200,34 @@ pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>
 
 自我測試 `Test-RegisterVmx.ps1` 就是照這條路測的：建 VM（放兩層資料夾 + 中文屬性值 + Notes + tag）→ 匯出當舊 vC 快照 → unregister 並把資料夾/屬性定義/tag 分類全刪 → `-MetaDir` 註冊 → 獨立驗證每一項照舊 → 冪等 → 清除。實測 **19/19 ALL PASS**（vCenter 9.1.1）。
 
-### 整套「datastore 搬家」流程
+### 整套「datastore 搬家」流程（順序很重要）
 
 ```
-vC A   （可省）Export-VcMeta.ps1 → export-A\   ← 舊 vC 之後會連不到的話先留一份
-       把 datastore 從 vC A 卸載、掛到 vC B（儲存端操作）
-vC B   Register-VmxFromDatastore.ps1 -SourceServer vcA（或 -MetaDir export-A）
-       → VM 回 inventory + 原資料夾 + 自訂屬性 + Notes + tag，一次做完
+vC A   ① Export-VcMeta.ps1 → export-A\        ← 🔴 一定先做：VM 一 unregister，A 端的 tag 指派 / 屬性值就沒了
+       ② unregister VM（或直接把 datastore 卸載）
+       ③ datastore 掛到 vC B（儲存端操作）
+vC B   ④ Register-VmxFromDatastore.ps1 -MetaDir export-A -DatacenterMap 'A=B'
+          → VM 回 inventory + 原資料夾 + 自訂屬性 + Notes + tag，一次做完
 ```
 
+`-SourceServer`（現場連舊 vC 抓）只有在舊 vC 的 VM **還在 inventory** 時才抓得到（例如 datastore 直接拔掉、VM 在 A 變 orphaned 那種情況）。已經 unregister 就只能靠 ①的匯出檔——所以預設就用 `-MetaDir`。
+
+### 實機跨 vC 驗證（2026-09-14）
+
+不是模擬，是真的兩台 vCenter + 一顆共用 NFS：
+
+| 步驟 | 內容 | 結果 |
+|---|---|---|
+| 準備 | vcd-nfs01 加 export → 掛成 NFS datastore 到 vC A 的 host 與 vC B 的 host | 兩邊都看到同一顆 191GB |
+| vC A | 建 `zz-real-vm01`（1GB vmdk）放 `ZZ-Real/Sub`，屬性 `zz-real-owner=基礎架構組-Kosten`，Notes，tag `zz-real-env/prod` | |
+| vC A | `Export-VcMeta -Folder ZZ-Real` → 8 個 CSV | 資料夾 2 / VM 1 / 屬性 1 / Notes 1 / tag 1 |
+| vC A | unregister | inventory 不見 |
+| vC B | `Register-VmxFromDatastore -MetaDir ... -DryRun` | 預告 1 台 → `ZZ-Real/Sub` |
+| vC B | 正式跑 | Registered 1 / CreatedFolder 2 / Placed 1 / CA Created+Set / TagCategory+Tag Created / Assigned |
+| vC B | 獨立查詢核對 | 名稱、vmx、資料夾、屬性值、Notes、tag **全部與 A 端一致**；PoweredOff；**InstanceUuid 跨 vC 保留** |
+| 拆除 | VM(含檔)、資料夾、屬性、tag、兩邊 datastore 卸載、NFS export 移除 | 兩邊複驗 clean |
+
+順帶驗到一件事：`InstanceUuid` 註冊到另一台 vCenter 後不會變，所以 Import 的 UUID 比對在真實搬移也有效，不必只靠名稱。
 ## 9. 直接 A → B 的單一腳本
 
 不想分兩步、也不需要改 CSV 時用這些。內部就是 `Export-VcMeta → Import-VcMeta`，CSV 與報告留在 `-WorkDir`（預設 `.\copy-<來源>-<時間>`）。
