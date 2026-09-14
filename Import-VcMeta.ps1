@@ -26,6 +26,7 @@ param(
     [string[]]$Include = @('Folders','Tags','CustomAttributes','Notes'),
     [string[]]$DatacenterMap,          # 例：-DatacenterMap 'DC-A=DC-B','Lab=Lab2'
     [string[]]$Folder,                 # 只匯入這些 VM 資料夾(含子樹)與裡面的 VM，例：-Folder 'Linux'
+    [string[]]$OnlyVMs,                # 只處理這些名字的 VM（其他型別不受影響）；Register 註冊完補資料用
     [switch]$MoveVMs,                  # 把 VM 搬進對應 Folder（預設不搬）
     [switch]$DryRun,
     [string]$ReportPath
@@ -75,17 +76,20 @@ if ($Folder) {
 }
 function Test-VmInScope {
     param([string]$Name, [string]$Uuid)
+    if ($OnlyVMs -and ($OnlyVMs -notcontains $Name)) { return $false }
     if (-not $Folder) { return $true }
     if ($Uuid -and $script:ScopeVmUuid.ContainsKey($Uuid)) { return $true }
     return $script:ScopeVmName.ContainsKey($Name)
 }
 # tag/屬性的指派：資料夾看路徑、VM 看是否在範圍內，其他型別在 -Folder 模式下一律跳過
+# （-OnlyVMs 只限制 VM 型別，其他型別不受影響）
 function Test-EntityInScope {
     param([string]$EntityType, [string]$EntityName, [string]$EntityUuid, [string]$EntityPath)
+    if ($EntityType -eq 'VirtualMachine' -and -not (Test-VmInScope $EntityName $EntityUuid)) { return $false }
     if (-not $Folder) { return $true }
     switch ($EntityType) {
         'Folder'         { return (Test-PathInScope $EntityPath) }
-        'VirtualMachine' { return (Test-VmInScope $EntityName $EntityUuid) }
+        'VirtualMachine' { return $true }
         default          { return $false }
     }
 }
@@ -276,7 +280,7 @@ if ($Include -contains 'CustomAttributes') {
     foreach ($r in $caValRows) { $usedAttr[$r.AttributeName] = $true }
 
     foreach ($d in (Read-Meta 'custom-attributes.csv')) {
-        if ($Folder -and -not $usedAttr.ContainsKey($d.Name)) { continue }
+        if (($Folder -or $OnlyVMs) -and -not $usedAttr.ContainsKey($d.Name)) { continue }
         if ($existingCA.ContainsKey($d.Name)) { Add-Result 'CustomAttribute' 'Exists' $d.Name; continue }
         if ($DryRun) { Add-Result 'CustomAttribute' 'WouldCreate' $d.Name $d.TargetType; continue }
         try {
@@ -322,7 +326,7 @@ if ($Include -contains 'Tags') {
     $catByName = @{}
     foreach ($c in (Get-TagCategory -Server $vc)) { $catByName[$c.Name] = $c }
     foreach ($c in (Read-Meta 'tag-categories.csv')) {
-        if ($Folder -and -not $usedCat.ContainsKey($c.Name)) { continue }
+        if (($Folder -or $OnlyVMs) -and -not $usedCat.ContainsKey($c.Name)) { continue }
         if ($catByName.ContainsKey($c.Name)) { Add-Result 'TagCategory' 'Exists' $c.Name; continue }
         if ($DryRun) { $wouldCat[$c.Name] = $true; Add-Result 'TagCategory' 'WouldCreate' $c.Name $c.EntityType; continue }
         try {
@@ -339,7 +343,7 @@ if ($Include -contains 'Tags') {
     foreach ($t in (Get-Tag -Server $vc)) { $tagByKey["$($t.Category.Name)|$($t.Name)"] = $t }
     foreach ($t in (Read-Meta 'tags.csv')) {
         $key = "$($t.Category)|$($t.Name)"
-        if ($Folder -and -not $usedTagKey.ContainsKey($key)) { continue }
+        if (($Folder -or $OnlyVMs) -and -not $usedTagKey.ContainsKey($key)) { continue }
         if ($tagByKey.ContainsKey($key)) { Add-Result 'Tag' 'Exists' $key; continue }
         if (-not $catByName.ContainsKey($t.Category) -and -not $wouldCat.ContainsKey($t.Category)) { Add-Result 'Tag' 'NoCategory' $key; continue }
         if ($DryRun) { $wouldTag[$key] = $true; Add-Result 'Tag' 'WouldCreate' $key; continue }
@@ -430,7 +434,7 @@ if (($Include -contains 'VMPlacement') -or $MoveVMs) {
     if (-not $MoveVMs) {
         Write-Host "    (未指定 -MoveVMs，只比對不搬移)"
     }
-    foreach ($p in (Read-Meta 'vm-placement.csv' | Where-Object { -not $Folder -or (Test-PathInScope $_.FolderPath) })) {
+    foreach ($p in (Read-Meta 'vm-placement.csv' | Where-Object { (-not $Folder -or (Test-PathInScope $_.FolderPath)) -and (-not $OnlyVMs -or $OnlyVMs -contains $_.VMName) })) {
         if ([string]::IsNullOrEmpty($p.FolderPath)) { continue }
         $vm = Resolve-Entity 'VirtualMachine' $p.VMName $p.InstanceUuid '' '' ''
         if (-not $vm) { Add-Result 'VMPlacement' 'VMNotFound' $p.VMName; continue }

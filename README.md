@@ -1,12 +1,36 @@
 # vCenter 中繼資料搬家（Folder / Tag / Custom Attribute / Notes）
 
-把 **vCenter A** 的 Folder 結構、Tag、Custom Attribute、VM Notes 匯出成 CSV（落地本機），
-再匯入 **vCenter B**。兩支腳本，PowerCLI 13.5，`pwsh` 執行。
+把 **vCenter A** 的 Folder 結構、Tag、Custom Attribute、VM Notes 搬到 **vCenter B**，
+以及 datastore 搬過去之後把 VM 註冊回 inventory 並照舊 vC 補齊。PowerCLI 13.5，`pwsh` 執行。
 
+| 腳本 | 用途 |
+|---|---|
+| `Copy-VcCustomAttributes.ps1` | **一支搞定**：自訂屬性（定義 + 值）直接 A → B |
+| `Copy-VcFolders.ps1` | **一支搞定**：資料夾樹直接建到 B（可連 VM 一起放進去） |
+| `Copy-VcMeta.ps1` | 通用版直接 A → B，`-Include` 選要搬哪幾類 |
+| `Register-VmxFromDatastore.ps1` | 掃 datastore 把 vmx/vmtx 註冊回 B；加 `-SourceServer` 或 `-MetaDir` 就**照舊 vC 把資料夾 / 屬性 / Notes / tag 一起做好** |
+| `Export-VcMeta.ps1` / `Import-VcMeta.ps1` | 底層兩步式（先落 CSV、可人工編修、再匯入）；上面幾支都是包這兩支 |
+| `Test-VcMeta.ps1` / `Test-RegisterVmx.ps1` | 端到端自我測試（建測試物件 → 跑 → 獨立驗證 → 清除） |
+
+## 0. 最常用的三種情境
+
+**只搬自訂屬性**
+```bash
+pwsh -Command "& .\Copy-VcCustomAttributes.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -DryRun"
 ```
-Export-VcMeta.ps1   來源 vC  →  CSV
-Import-VcMeta.ps1   CSV      →  目標 vC
+
+**只搬資料夾樹（新 vC 已有同名/同 UUID 的 VM 就順便搬進去）**
+```bash
+pwsh -Command "& .\Copy-VcFolders.ps1 -SourceServer <舊vC> -SourcePassword '<pw>' -TargetServer <新vC> -TargetPassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -MoveVMs -DryRun"
 ```
+
+**datastore 搬到新 vC 後，VM 註冊回來並照舊 vC 補齊資料夾 / 屬性 / Notes / tag**
+```bash
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap '<舊DC>=<新DC>' -DryRun"
+```
+
+三個都先 `-DryRun` 看報告，確認後拿掉再跑。`-Folder 'Linux'` 可把任何一個縮到單一資料夾子樹。
+舊 vC 已經連不到？先前用 `Export-VcMeta` 匯出的目錄可用 `-MetaDir` 代替 `-SourceServer`。
 
 ## 1. 匯出（來源 vCenter）
 
@@ -158,11 +182,41 @@ pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <目標vC> -User admini
 
 自我測試 `Test-RegisterVmx.ps1`：建丟棄式 VM + 範本 → unregister → 註冊回來 → 驗證（路徑一致、範本仍是範本、placement 資料夾、沒開機、重跑冪等）→ 清除。實測 **13/13 ALL PASS**（vCenter 9.1.1，VMFS）。
 
+### 照舊 vC 一次做好：`-SourceServer` / `-MetaDir`
+
+加上其中一個，註冊完會自動：**放回原本的資料夾**（缺的資料夾自動建）→ **補自訂屬性定義與值** → **補 Notes**（其實 vmx 自帶，會回報 `AlreadySet`）→ **重建 tag 分類/標籤並指派**。只補剛註冊的那幾台，不會動到新 vC 上其他東西。
+
+```bash
+# 直接連舊 vC 抓（內部先跑 Export-VcMeta 到 -MetaDir，預設 .\meta-<舊vC>-<時間>）
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap '<舊DC>=<新DC>'"
+```
+
+```bash
+# 舊 vC 已連不到：用先前 Export-VcMeta 匯出的目錄
+pwsh -Command "& .\Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap '<舊DC>=<新DC>'"
+```
+
+報告有兩份：`register-report-*.csv`（註冊/放資料夾）與 `*-meta.csv`（屬性/Notes/tag）。
+
+自我測試 `Test-RegisterVmx.ps1` 就是照這條路測的：建 VM（放兩層資料夾 + 中文屬性值 + Notes + tag）→ 匯出當舊 vC 快照 → unregister 並把資料夾/屬性定義/tag 分類全刪 → `-MetaDir` 註冊 → 獨立驗證每一項照舊 → 冪等 → 清除。實測 **19/19 ALL PASS**（vCenter 9.1.1）。
+
 ### 整套「datastore 搬家」流程
 
 ```
-vC A   Export-VcMeta.ps1                          → export-A\*.csv
+vC A   （可省）Export-VcMeta.ps1 → export-A\   ← 舊 vC 之後會連不到的話先留一份
        把 datastore 從 vC A 卸載、掛到 vC B（儲存端操作）
-vC B   Register-VmxFromDatastore.ps1 -PlacementCsv export-A\vm-placement.csv   → VM 回 inventory + 進原資料夾
-vC B   Import-VcMeta.ps1 -InDir export-A          → tag / 自訂屬性 / Notes 補上（VM 已在，全部對得到）
+vC B   Register-VmxFromDatastore.ps1 -SourceServer vcA（或 -MetaDir export-A）
+       → VM 回 inventory + 原資料夾 + 自訂屬性 + Notes + tag，一次做完
 ```
+
+## 9. 直接 A → B 的單一腳本
+
+不想分兩步、也不需要改 CSV 時用這些。內部就是 `Export-VcMeta → Import-VcMeta`，CSV 與報告留在 `-WorkDir`（預設 `.\copy-<來源>-<時間>`）。
+
+| 腳本 | 等同 |
+|---|---|
+| `Copy-VcCustomAttributes.ps1` | `Copy-VcMeta.ps1 -Include CustomAttributes` |
+| `Copy-VcFolders.ps1` | `Copy-VcMeta.ps1 -Include Folders`（加 `-MoveVMs` 則含 `VMPlacement`） |
+| `Copy-VcMeta.ps1 -Include Tags,Notes` | 其他組合自己選 |
+
+共同參數：`-SourceServer/-SourceUser/-SourcePassword`、`-TargetServer/-TargetUser/-TargetPassword`、`-DatacenterMap`、`-Folder`、`-Datacenter`、`-DryRun`、`-WorkDir`。

@@ -12,6 +12,13 @@
   # 正式註冊，並依 vm-placement.csv 直接放進對應資料夾
   ./Register-VmxFromDatastore.ps1 -Server <vC> -User administrator@vsphere.local -Password '<pw>' -Datastore ds01 -Cluster cl01 -PlacementCsv .\export-A\vm-placement.csv
 
+  # 照舊 vC 一次做好：註冊 + 放回原資料夾 + 自訂屬性 + Notes + tag（直接連舊 vC 抓）
+  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 `
+      -SourceServer <舊vC> -SourcePassword '<pw>' -DatacenterMap 'DC-A=DC-B'
+
+  # 同上，但舊 vC 已經連不到了，用之前 Export-VcMeta 匯出的目錄
+  ./Register-VmxFromDatastore.ps1 -Server <新vC> -Password '<pw>' -Datastore ds01 -Cluster cl01 -MetaDir .\export-A -DatacenterMap 'DC-A=DC-B'
+
 .NOTES
   - 已註冊的 vmx（依 [datastore] 路徑比對）一律跳過，重複跑安全。
   - .vmtx 會註冊成範本（-NoTemplates 可略過）。
@@ -32,6 +39,14 @@ param(
     [string]$Folder,                   # 註冊到哪個 VM 資料夾（相對 datacenter 的路徑，例 'Linux'），預設 DC 根
     [string]$PlacementCsv,             # Export-VcMeta 的 vm-placement.csv：註冊後依 VMName 搬到各自資料夾
     [switch]$CreateFolders,            # 資料夾不存在就建
+
+    # --- 照舊 vC 把資料夾 / 自訂屬性 / Notes / tag 一起做好（二選一）---
+    [string]$SourceServer,             # 直接連舊 vC 抓（會先跑 Export-VcMeta 到 -MetaDir）
+    [string]$SourceUser = 'administrator@vsphere.local',
+    [string]$SourcePassword,
+    [string]$MetaDir,                  # 或給已經匯出好的目錄（Export-VcMeta 的 -OutDir）
+    [string[]]$DatacenterMap,          # 舊=新 DC 名稱對應，例 'DC-A=DC-B'
+    [string[]]$SourceDatacenter,       # 只從舊 vC 抓這些 Datacenter
 
     [string[]]$Include,                # 只註冊符合的名稱（wildcard，例 'web*','db01'）
     [string[]]$Exclude = @('vCLS*'),   # 排除（預設略過 vCLS）
@@ -61,6 +76,25 @@ function Test-NameMatch {
     if ($Include) { $hit = $false; foreach ($p in $Include) { if ($Name -like $p) { $hit = $true; break } }; if (-not $hit) { return $false } }
     foreach ($p in $Exclude) { if ($Name -like $p) { return $false } }
     return $true
+}
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:RegisteredNames = New-Object System.Collections.ArrayList
+
+# --- 照舊 vC：先把舊 vC 的資料抓下來（或用現成的 -MetaDir）---
+if ($SourceServer) {
+    if (-not $SourcePassword) { throw "-SourceServer 需要 -SourcePassword" }
+    if (-not $MetaDir) { $MetaDir = Join-Path (Get-Location) ('meta-{0}-{1:yyyyMMdd-HHmmss}' -f ($SourceServer -replace '[^\w.-]','_'), (Get-Date)) }
+    Write-Host "==================== 從舊 vC $SourceServer 抓資料夾 / tag / 屬性 / Notes ===================="
+    $exp = @{ Server = $SourceServer; User = $SourceUser; Password = $SourcePassword; OutDir = $MetaDir }
+    if ($SourceDatacenter) { $exp.Datacenter = $SourceDatacenter }
+    & "$here\Export-VcMeta.ps1" @exp
+    Write-Host ""
+}
+if ($MetaDir) {
+    $MetaDir = (Resolve-Path $MetaDir).Path
+    if (-not $PlacementCsv) { $PlacementCsv = Join-Path $MetaDir 'vm-placement.csv' }
+    $CreateFolders = $true
 }
 
 # --- 連線 ---
@@ -203,19 +237,28 @@ foreach ($dsName in $Datastore) {
 
         $h = $hosts[$i % $hosts.Count]; $i++
         $kind = if ($item.IsTemplate) { 'Template' } else { 'VM' }
-        if ($DryRun) { Add-Result 'WouldRegister' $item.Path "$kind -> host=$($h.Name) folder=$($targetFolder.Name)"; continue }
+
+        # VM 名稱：預設抓 vmx 內 displayName（RegisterVM 的 name 不能空），讀不到才用檔名
+        $name = $null
+        if (-not $NameFromFile) {
+            $rel = ($item.Path -replace '^\[[^\]]+\]\s*', '')
+            $name = Get-VmxDisplayName $dc.Name $ds.Name $rel
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $item.Name }
+
+        if ($DryRun) {
+            [void]$script:RegisteredNames.Add($name)
+            $where = if ($placement.ContainsKey($name)) { $placement[$name] } else { $targetFolder.Name }
+            Add-Result 'WouldRegister' $item.Path "$kind '$name' -> host=$($h.Name) folder=$where"
+            continue
+        }
 
         try {
-            $name = $null
-            if (-not $NameFromFile) {
-                $rel = ($item.Path -replace '^\[[^\]]+\]\s*', '')
-                $name = Get-VmxDisplayName $dc.Name $ds.Name $rel
-            }
-            if ([string]::IsNullOrWhiteSpace($name)) { $name = $item.Name }   # 讀不到就用檔名
             $pool = if ($item.IsTemplate) { $null } else { $poolByHost[$h.Name] }
             $vmRef = $folderView.RegisterVM($item.Path, $name, $item.IsTemplate, $pool, $h.ExtensionData.MoRef)
             $registered[$item.Path.ToLower()] = $true
             $vmObj = Get-VIObjectByVIView -MORef $vmRef -Server $vc
+            [void]$script:RegisteredNames.Add($vmObj.Name)
             Add-Result 'Registered' $item.Path "$kind '$($vmObj.Name)' on $($h.Name)"
 
             # 依 placement 搬到各自資料夾
@@ -232,6 +275,21 @@ foreach ($dsName in $Datastore) {
             Add-Result 'Failed' $item.Path ($_.Exception.Message -split "`n")[0]
         }
     }
+}
+
+# --- 照舊 vC 補自訂屬性 / Notes / tag（資料夾在註冊時已依 placement 放好）---
+if ($MetaDir -and $script:RegisteredNames.Count) {
+    Write-Host "`n==================== 依舊 vC 補自訂屬性 / Notes / tag（$($script:RegisteredNames.Count) 台）===================="
+    $imp = @{
+        Server = $Server; InDir = $MetaDir
+        Include = @('CustomAttributes','Notes','Tags')
+        OnlyVMs = @($script:RegisteredNames)
+        ReportPath = ($ReportPath -replace '\.csv$', '-meta.csv')
+    }
+    if ($Credential) { $imp.Credential = $Credential } else { $imp.User = $User; $imp.Password = $Password }
+    if ($DatacenterMap) { $imp.DatacenterMap = $DatacenterMap }
+    if ($DryRun)        { $imp.DryRun = $true }
+    & "$here\Import-VcMeta.ps1" @imp
 }
 
 # --- 總結 ---
