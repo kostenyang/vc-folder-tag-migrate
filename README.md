@@ -12,7 +12,7 @@
 | `Register-VmxFromDatastore.ps1` | 動 4（新 vC）：依動 3 產生的 `unregistered.csv` 逐台註冊回來、直接放進原資料夾，結尾**對帳**列出還沒過來的（也可 `-Datastore` 掃整顆） |
 | `Export-VcMeta.ps1` / `Import-VcMeta.ps1` | 底層兩步式（先落 CSV、可人工編修、再匯入）；上面幾支都是包這兩支 |
 | `Test-VcMeta.ps1` / `Test-RegisterVmx.ps1` | 端到端自我測試（建測試物件 → 跑 → 獨立驗證 → 清除） |
-| **`en/`** | **交付客戶用的英文版**：同樣邏輯，註解 / 訊息全英文、純 ASCII、UTF-8 BOM、CRLF——Windows PowerShell 5.1 / ISE / 記事本開都不會亂碼；已在 PS 5.1 + PowerCLI 13.3 跑完整條主線；一開始就關掉 CEIP 詢問並接受自簽憑證 |
+| **`en/ps7/`、`en/ps5/`** | **交付客戶用的英文版，兩版**：`ps7/` 給 PowerShell 7（`#Requires 7.0`、CSV `utf8BOM`），`ps5/` 給 Windows PowerShell 5.1 / ISE（`#Requires 5.1`、CSV `UTF8`）。同樣邏輯，註解 / 訊息全英文、純 ASCII、UTF-8 BOM、CRLF；各自在對應引擎驗證過；一開始就關掉 CEIP 詢問並接受自簽憑證 |
 
 ## 0. 主線：五動分開做（兩台 vC 不必同時在線，每動可獨立重跑）
 

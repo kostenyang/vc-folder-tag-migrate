@@ -1,14 +1,22 @@
 ﻿# vCenter migration scripts (English / ASCII edition)
 
 Same logic as the scripts in the repository root, with every comment and message
-in English. Files are **pure ASCII, UTF-8 with BOM, CRLF**, so they open and run
-cleanly in Windows PowerShell 5.1, PowerShell ISE, Notepad and VS Code alike.
-Use this edition on customer machines.
+in English. Two editions, one per PowerShell engine:
 
-Verified: the full runbook below was executed end-to-end with **Windows PowerShell
-5.1.20348 + PowerCLI 13.3** (the engine behind ISE) against vCenter 8.0.3 -> 9.1.1
-with self-signed certificates. CSV files written by 5.1 are UTF-8 with BOM, so
-non-ASCII data (e.g. Chinese attribute values) survives the round trip.
+| Folder | Engine | `#Requires` | CSV encoding | Verified with |
+|---|---|---|---|---|
+| `ps7/` | PowerShell 7.x (`pwsh.exe`) | `-Version 7.0` (refuses to run on 5.1) | `utf8BOM` | pwsh 7.4.14 + PowerCLI 13.5 |
+| `ps5/` | Windows PowerShell 5.1 (`powershell.exe`, PowerShell ISE) | `-Version 5.1` (also runs on 7) | `UTF8` (writes a BOM on 5.1) | powershell 5.1.20348 + PowerCLI 13.3 |
+
+Both are **pure ASCII, UTF-8 with BOM, CRLF**, so they open and run cleanly in
+PowerShell ISE, Notepad and VS Code. Pick the folder that matches the engine on
+the customer's machine; the parameters and the output are identical.
+
+The `ps5/` code (identical except for the two lines above) completed the whole
+runbook end-to-end on Windows PowerShell 5.1 against vCenter 8.0.3 -> 9.1.1 with
+self-signed certificates; the `ps7/` code is what has been used for every earlier
+test run. CSV files written by either engine are UTF-8 with BOM, so non-ASCII data
+(e.g. Chinese attribute values) survives the round trip.
 
 ## Self-signed certificates / first run
 
@@ -56,8 +64,9 @@ Step 5  new vC   Import-VcMeta.ps1 -Include CustomAttributes,Notes,Tags attribut
 ```
 
 Add `-DryRun` to any step to see what it would do without writing anything.
-Inside PowerShell / ISE the commands can be run as shown; from `cmd.exe` use
-`powershell -Command "& .\Script.ps1 ..."` so that comma-separated lists such as
+Run them from inside the `ps5\` or `ps7\` folder (or prefix the path). Inside a
+PowerShell / ISE session the commands can be run as shown; from `cmd.exe` use
+`powershell -Command "& .\ps5\Script.ps1 ..."` so that comma-separated lists such as
 `-Include CustomAttributes,Tags` are passed as arrays.
 
 ## Notes
