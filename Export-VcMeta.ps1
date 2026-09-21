@@ -143,13 +143,6 @@ if ($Include -contains 'Folders') {
 if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Folder) {
     if ($Folder) { $scopeVmIds = @{} }
     $vmViews = Get-View -ViewType VirtualMachine -Property Name,Parent,Config.InstanceUuid,Config.Uuid,Config.Annotation,Config.Template,Config.Files.VmPathName,Runtime.PowerState,Runtime.Host -Server $vc
-    # datastore -> 底層 LUN（VMFS extent 的 DiskName，例 naa.6000…；多 extent 用 ; 接；NFS/vSAN 留空）
-    $dsLun = @{}
-    foreach ($dsv in (Get-View -ViewType Datastore -Property Name,Info -Server $vc)) {
-        $ext = @()
-        try { if ($dsv.Info.Vmfs) { $ext = @($dsv.Info.Vmfs.Extent | ForEach-Object { $_.DiskName }) } } catch { }
-        $dsLun[$dsv.Name] = ($ext -join ';')
-    }
     # host -> 名稱 / 所屬叢集（清單多記 Cluster / VMHost，Unregister 可依 cluster 篩）
     $hostName = @{}; $hostCluster = @{}
     $clusterName = @{}
@@ -182,7 +175,6 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
             PowerState   = "$($vm.Runtime.PowerState)"
             VMHost       = if ($vm.Runtime.Host) { $hostName[$vm.Runtime.Host.ToString()] } else { '' }
             Cluster      = if ($vm.Runtime.Host) { $hostCluster[$vm.Runtime.Host.ToString()] } else { '' }
-            Lun          = $(if ($vm.Config.Files.VmPathName -match '^\[([^\]]+)\]') { $dsLun[$Matches[1]] } else { '' })
             MoRef        = $vm.MoRef.ToString()
         })
         $ann = $vm.Config.Annotation
@@ -197,7 +189,7 @@ if (($Include -contains 'VMPlacement') -or ($Include -contains 'Notes') -or $Fol
         }
     }
     if ($Include -contains 'VMPlacement') {
-        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','VmPathName','PowerState','VMHost','Cluster','Lun','MoRef')
+        Write-Meta ($place | Sort-Object Datacenter,FolderPath,VMName) (Join-Path $OutDir 'vm-placement.csv') @('Datacenter','VMName','InstanceUuid','BiosUuid','IsTemplate','FolderPath','InVApp','VmPathName','PowerState','VMHost','Cluster','MoRef')
     }
     if ($Include -contains 'Notes') {
         Write-Meta ($notes | Sort-Object EntityName) (Join-Path $OutDir 'notes.csv') @('Datacenter','EntityType','EntityName','InstanceUuid','Notes')

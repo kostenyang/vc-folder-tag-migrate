@@ -196,7 +196,6 @@ c.push(P('依匯出清單把 VM / 範本從舊 vC 的 inventory 移除，檔案�
 c.push(...tbl(['參數', '說明'], [
   ['-MetaDir', '動 0 的輸出目錄（必填；沒有 vm-placement.csv 直接拒絕）'],
   ['-Datastore ds01', '清單裡 vmx 在這些 datastore 上的 VM（= VM 的 home datastore）'],
-  ['-Lun naa.6000… / 尾碼', '儲存端給的 LUN ID：用 VMFS extent 反查落在上面的 datastore，效果同 -Datastore'],
   ['-Folder \'Linux\'', '清單裡在這些資料夾子樹的 VM'],
   ['-VM web01,web02', '直接點名'],
   ['-ShutdownFirst / -ShutdownTimeoutSec', '開著的 VM 先 guest shutdown（需 VMware Tools），預設不動'],
@@ -206,7 +205,7 @@ c.push(P([bold('安全機制：')]));
 c.push(B('沒有匯出檔不給做——unregister 之後舊 vC 上的 tag 指派、屬性值就沒了。'));
 c.push(B('清單裡的 vmx 路徑要跟現在一致（SkippedStale），防止拿舊的匯出檔來操作。'));
 c.push(B('開機中的 VM 跳過（SkippedPoweredOn），除非加 -ShutdownFirst。'));
-c.push(B('同名多台跳過（SkippedAmbiguous）；不接受「全部」，一定要給 -Datastore / -Lun / -Cluster / -VMHost / -Folder / -VM 其中一個。'));
+c.push(B('同名多台跳過（SkippedAmbiguous）；不接受「全部」，一定要給 -Datastore / -Cluster / -VMHost / -Folder / -VM 其中一個。'));
 c.push(B('跨 datastore 的 VM 只警告不擋：名單內有 vmdk 在別顆（WarnDiskElsewhere）、名單外卻有 vmdk 在這顆（WarnDiskOnDatastore）——只搬一顆 LUN 這兩種都會壞，先把碟搬齊或一起搬。'));
 c.push(B([t('每台成功 unregister 的都追加到 '), mono('<MetaDir>\\unregistered.csv'), t('（名稱 / vmx / 時間 / 原資料夾 / UUID），這就是動 4 對帳的依據。')]));
 
