@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 5.1
+<#
 .SYNOPSIS
   Old vCenter side (step 3): remove VMs / templates from the inventory according
   to the export manifest (vm-placement.csv). The files stay on the datastore.
@@ -56,7 +57,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
+$enc = 'UTF8'      # Windows PowerShell 5.1: 'UTF8' already writes a BOM ('utf8BOM' does not exist on 5.1)
 if (-not $Datastore -and -not $Cluster -and -not $VMHost -and -not $Folder -and -not $VM) { throw "Give at least one of -Datastore / -Cluster / -VMHost / -Folder / -VM. 'All VMs' is not accepted." }
 $MetaDir = (Resolve-Path $MetaDir).Path
 $manifestPath = Join-Path $MetaDir 'vm-placement.csv'

@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 7.0
+<#
 .SYNOPSIS
   Import the CSV files produced by Export-VcMeta.ps1 into the target vCenter:
   rebuild the folder tree, tag categories/tags/assignments, custom attribute
@@ -46,7 +47,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
+$enc = 'utf8BOM'   # PowerShell 7: explicit UTF-8 with BOM so Excel and Windows PowerShell read the CSV correctly
 $InDir = (Resolve-Path $InDir).Path
 if (-not $ReportPath) { $ReportPath = Join-Path $InDir ('import-report-{0:yyyyMMdd-HHmmss}.csv' -f (Get-Date)) }
 

@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 5.1
+<#
 .SYNOPSIS
   Folder tree only: rebuild the VM folder structure of vCenter A on vCenter B (optionally move the VMs into it).
 

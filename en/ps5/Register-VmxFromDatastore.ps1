@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 5.1
+<#
 .SYNOPSIS
   New vCenter side (step 4): register VMs / templates back into the inventory and
   place them directly into their original folders. Two modes:
@@ -76,7 +77,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $Datastore -and -not $UnregisteredCsv) { throw "Give either -UnregisteredCsv (main path) or -Datastore (scan mode)" }
-$enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
+$enc = 'UTF8'      # Windows PowerShell 5.1: 'UTF8' already writes a BOM ('utf8BOM' does not exist on 5.1)
 if (-not $ReportPath) { $ReportPath = Join-Path (Get-Location) ('register-report-{0:yyyyMMdd-HHmmss}.csv' -f (Get-Date)) }
 
 $script:Report = New-Object System.Collections.ArrayList

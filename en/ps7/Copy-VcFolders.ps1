@@ -1,10 +1,12 @@
-﻿<#
+﻿#Requires -Version 7.0
+<#
 .SYNOPSIS
-  Custom attributes only (definitions + the value on every object): vCenter A to vCenter B in one script.
+  Folder tree only: rebuild the VM folder structure of vCenter A on vCenter B (optionally move the VMs into it).
 
 .EXAMPLE
-  .\Copy-VcCustomAttributes.ps1 -SourceServer vcA -SourcePassword 'x' -TargetServer vcB -TargetPassword 'y' -DatacenterMap 'DC-A=DC-B' -DryRun
-  .\Copy-VcCustomAttributes.ps1 ... -Folder 'Linux'     # only the VMs inside one folder
+  .\Copy-VcFolders.ps1 -SourceServer vcA -SourcePassword 'x' -TargetServer vcB -TargetPassword 'y' -DatacenterMap 'DC-A=DC-B' -DryRun
+  .\Copy-VcFolders.ps1 ... -MoveVMs          # VMs that already exist on the target (same name / UUID) are moved into their folders
+  .\Copy-VcFolders.ps1 ... -Folder 'Linux'   # only this subtree
 #>
 [CmdletBinding()]
 param(
@@ -17,10 +19,10 @@ param(
     [string[]]$Folder,
     [string[]]$Datacenter,
     [string[]]$DatacenterMap,
-    [switch]$AllDefinitions,           # also create attribute definitions that no object uses
+    [switch]$MoveVMs,
     [switch]$DryRun,
     [string]$WorkDir
 )
 $p = @{} + $PSBoundParameters
-$p.Include = @('CustomAttributes')
+$p.Include = if ($MoveVMs) { @('Folders','VMPlacement') } else { @('Folders') }
 & (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'Copy-VcMeta.ps1') @p

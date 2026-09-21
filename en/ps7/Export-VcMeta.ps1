@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 7.0
+<#
 .SYNOPSIS
   Export folder tree / VM placement / tags / custom attributes / notes from the
   source vCenter into CSV files.
@@ -34,7 +35,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
+$enc = 'utf8BOM'   # PowerShell 7: explicit UTF-8 with BOM so Excel and Windows PowerShell read the CSV correctly
 
 # The vCenter tagging service (vAPI/CIS) occasionally returns 503 right after a new session; retry a few times.
 function Invoke-WithRetry {

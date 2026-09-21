@@ -1,4 +1,5 @@
-﻿<#
+﻿#Requires -Version 5.1
+<#
 .SYNOPSIS
   One script, straight from vCenter A to vCenter B: folders / tags / custom
   attributes / notes / VM placement. Internally runs Export-VcMeta then
