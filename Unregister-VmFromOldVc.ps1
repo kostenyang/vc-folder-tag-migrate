@@ -7,6 +7,8 @@
     - 沒有 -MetaDir（先跑過 Export-VcMeta）不給做 —— unregister 之後 tag 指派 / 屬性值就沒了
     - 清單裡的 vmx 路徑要跟現在一致（確保匯出檔不是舊的）
     - 開機中的 VM 不動（或 -ShutdownFirst）
+    - -Datastore / -Lun 時檢查跨 datastore 的 VM：名單內有 vmdk 在別顆（WarnDiskElsewhere）、
+      名單外卻有 vmdk 在這顆（WarnDiskOnDatastore）—— 只警告不擋，請先搬碟或一起搬
     - 每台寫進 <MetaDir>\unregistered.csv（名稱 / vmx / 原資料夾 / 時間）——這份就是下一步\n      Register-VmxFromDatastore -UnregisteredCsv 的輸入，可先用 Excel 改（例如改目的資料夾）再註冊
 
 .EXAMPLE
@@ -14,7 +16,10 @@
   ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Datastore ds01 -DryRun
 
   # cluster 裡且在 ds01 上的（多條件取交集）
-  ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .export-A -Cluster cl01 -Datastore ds01
+  ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Cluster cl01 -Datastore ds01
+
+  # 儲存團隊給的是 LUN ID：反查落在這顆 LUN 上的 datastore（可只給尾碼）
+  ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Lun naa.6000c29b1a2b3c4d
 
   # 只做某個資料夾的
   ./Unregister-VmFromOldVc.ps1 -Server vcA -Password 'x' -MetaDir .\export-A -Folder 'Linux'
@@ -28,6 +33,7 @@ param(
 
     # 篩選條件：可以給多個，同時給時取「交集」（例：-Cluster cl01 -Datastore ds01 = cl01 裡且在 ds01 上的）
     [string[]]$Datastore,              # 清單裡 vmx 在這些 datastore 上的
+    [string[]]$Lun,                    # 底層 LUN（naa.xxx / eui.xxx / t10.xxx，可只給尾碼、可 wildcard）→ 反查落在上面的 VMFS datastore
     [string[]]$Cluster,                # 目前跑在這些叢集上的（連舊 vC 即時查）
     [string[]]$VMHost,                 # 目前跑在這些主機上的（連舊 vC 即時查）
     [string[]]$Folder,                 # 清單裡在這些資料夾子樹的
@@ -41,7 +47,7 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
 $enc = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
-if (-not $Datastore -and -not $Cluster -and -not $VMHost -and -not $Folder -and -not $VM) { throw "要給 -Datastore / -Cluster / -VMHost / -Folder / -VM 至少一個，不接受「全部」" }
+if (-not $Datastore -and -not $Lun -and -not $Cluster -and -not $VMHost -and -not $Folder -and -not $VM) { throw "要給 -Datastore / -Lun / -Cluster / -VMHost / -Folder / -VM 至少一個，不接受「全部」" }
 $MetaDir = (Resolve-Path $MetaDir).Path
 $manifestPath = Join-Path $MetaDir 'vm-placement.csv'
 if (-not (Test-Path $manifestPath)) { throw "$MetaDir 裡沒有 vm-placement.csv —— 先跑 Export-VcMeta.ps1 再來" }
@@ -57,7 +63,7 @@ function Add-Result {
     [void]$script:Report.Add([pscustomobject]@{ Time = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); Action = $Action; Target = $Target; Detail = $Detail })
     if (-not $script:Stats.ContainsKey($Action)) { $script:Stats[$Action] = 0 }
     $script:Stats[$Action]++
-    $tag = switch -Wildcard ($Action) { 'Unregistered' { '[+]' } 'Would*' { '[~]' } 'Failed*' { '[X]' } 'Skipped*' { '[-]' } default { '[ ]' } }
+    $tag = switch -Wildcard ($Action) { 'Unregistered' { '[+]' } 'Would*' { '[~]' } 'Failed*' { '[X]' } 'Skipped*' { '[-]' } 'Warn*' { '[!]' } default { '[ ]' } }
     Write-Host ("  {0} {1,-18} {2}  {3}" -f $tag, $Action, $Target, $Detail)
 }
 
@@ -66,6 +72,20 @@ Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -DisplayDeprecationWa
 $vc = Connect-VIServer -Server $Server -User $User -Password $Password
 Write-Host "[+] 已連線 $($vc.Name) ($($vc.Version))"
 if ($DryRun) { Write-Host "[!] DryRun：只檢查、不 unregister" -ForegroundColor Yellow }
+
+# --- -Lun：用 VMFS extent 反查 datastore，併進 -Datastore（同一個維度，取聯集）---
+if ($Lun) {
+    $hit = @()
+    foreach ($dsv in (Get-View -ViewType Datastore -Property Name,Info -Server $vc)) {
+        $ext = @(); try { if ($dsv.Info.Vmfs) { $ext = @($dsv.Info.Vmfs.Extent | ForEach-Object { $_.DiskName }) } } catch { }
+        foreach ($pat in $Lun) {
+            $pp = if ($pat -match '[*?]') { $pat } else { "*$pat*" }
+            if ($ext | Where-Object { $_ -like $pp }) { $hit += $dsv.Name; Write-Host "  [*] LUN $pat → datastore $($dsv.Name)（$($ext -join ';')）"; break }
+        }
+    }
+    if (-not $hit) { Write-Host "  [!] 舊 vC 上沒有 datastore 落在 LUN $($Lun -join ',')"; Disconnect-VIServer -Server $vc -Confirm:$false | Out-Null; return }
+    $Datastore = @(@($Datastore) + $hit | Where-Object { $_ } | Sort-Object -Unique)
+}
 
 # --- 從清單挑要做的（多個條件取交集）---
 $inCluster = $null
@@ -97,10 +117,32 @@ $picked = @($manifest | Where-Object {
     $true
 })
 $cond = @()
-if ($VM) { $cond += "VM=$($VM -join ',')" }; if ($Datastore) { $cond += "datastore=$($Datastore -join ',')" }
+if ($VM) { $cond += "VM=$($VM -join ',')" }; if ($Datastore) { $cond += "datastore=$($Datastore -join ',')" }; if ($Lun) { $cond += "lun=$($Lun -join ',')" }
 if ($Cluster) { $cond += "cluster=$($Cluster -join ',')" }; if ($VMHost) { $cond += "host=$($VMHost -join ',')" }; if ($Folder) { $cond += "folder=$($Folder -join ',')" }
 Write-Host "[*] 清單 $($manifest.Count) 台，符合 [$($cond -join ' AND ')] 的 $($picked.Count) 台"
 if (-not $picked.Count) { Disconnect-VIServer -Server $vc -Confirm:$false | Out-Null; return }
+
+# --- 跨 datastore 檢查（只有 -Datastore / -Lun 時有意義）---
+# 只搬一顆 LUN 的話，這兩種 VM 會壞：
+#   A) 在名單內（vmx 在目標 datastore）但有 vmdk 在別顆      → 註冊到新 vC 後那顆碟找不到
+#   B) 不在名單內（vmx 在別顆）但有 vmdk 在目標 datastore    → 留在舊 vC 的 VM 碟被搬走
+if ($Datastore) {
+    $pickedNames = @{}; foreach ($r in $picked) { $pickedNames[$r.VMName] = $true }
+    foreach ($v in (Get-View -ViewType VirtualMachine -Property Name,Config.Files.VmPathName,Config.Hardware.Device -Server $vc)) {
+        $homeDs = ($v.Config.Files.VmPathName -replace '^\[([^\]]+)\].*$', '$1')
+        $diskDs = @($v.Config.Hardware.Device | Where-Object { $_ -is [VMware.Vim.VirtualDisk] -and $_.Backing.FileName } |
+                    ForEach-Object { ($_.Backing.FileName -replace '^\[([^\]]+)\].*$', '$1') } | Sort-Object -Unique)
+        $homeIn  = $Datastore -contains $homeDs
+        $diskOut = @($diskDs | Where-Object { $Datastore -notcontains $_ })
+        $diskIn  = @($diskDs | Where-Object { $Datastore -contains $_ })
+        if ($homeIn -and $diskOut.Count -and $pickedNames.ContainsKey($v.Name)) {
+            Add-Result 'WarnDiskElsewhere' $v.Name "有 vmdk 在 $($diskOut -join ',')，只搬 $($Datastore -join ',') 這顆會缺碟"
+        }
+        if (-not $homeIn -and $diskIn.Count) {
+            Add-Result 'WarnDiskOnDatastore' $v.Name "vmx 在 $homeDs、但有 vmdk 在 $($diskIn -join ',')，不在名單內卻會被搬走"
+        }
+    }
+}
 
 $done = New-Object System.Collections.ArrayList
 foreach ($r in $picked) {

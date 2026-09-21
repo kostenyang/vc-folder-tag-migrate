@@ -52,7 +52,9 @@ pwsh -Command "& .\Import-VcMeta.ps1 -Server <新vC> -User administrator@vsphere
 
 - 每一動都支援 `-DryRun`，都是 idempotent：重跑只會補缺的、不會重做。
 - 動 1 / 2 在 VM 過去前就能做完，動 4 註冊時資料夾已經在；動 2 此時只建定義，VM 的值 / 指派等動 5。
-- 動 3 的篩選：`-Datastore` / `-Cluster` / `-VMHost` / `-Folder` / `-VM`，可以同時給，**取交集**（例 `-Cluster cl01 -Datastore ds01` = cl01 裡且在 ds01 上的）。
+- 動 3 的篩選：`-Datastore` / `-Lun` / `-Cluster` / `-VMHost` / `-Folder` / `-VM`，可以同時給，**取交集**（例 `-Cluster cl01 -Datastore ds01` = cl01 裡且在 ds01 上的）。
+  - `-Datastore ds01` = **vmx 放在 ds01 上**的 VM（依動 0 清單的 `VmPathName`）；`-Lun naa.6000…`（可只給尾碼）用 VMFS extent 反查 datastore，效果同 `-Datastore`。
+  - 跨 datastore 的 VM 會警告不擋：名單內有 vmdk 在別顆 → `WarnDiskElsewhere`；名單外卻有 vmdk 在這顆 → `WarnDiskOnDatastore`。只搬一顆 LUN 這兩種都會壞，先把碟搬齊或一起搬。
 - 動 3 的安全機制：沒有動 0 的匯出檔不給做；清單 vmx 路徑要跟現在一致；開著的跳過（`-ShutdownFirst` 可關）；不接受「全部」。
 - 動 4 的輸入就是動 3 產生的 `unregistered.csv`：精確只註冊拔掉的那批，vmx 路徑 / 名稱 / 原資料夾都在裡面；**可以先用 Excel 改**（例如改目的資料夾）再跑。可分批跑很多次，每次都對帳。
 - 沒有 CSV（例如清孤兒）才用 `-Datastore ds01 -PlacementCsv ...` 掃整顆 datastore。
@@ -88,7 +90,7 @@ pwsh -File .\Export-VcMeta.ps1 -Server <來源vC> -User administrator@vsphere.lo
 | 檔案 | 內容 |
 |---|---|
 | `folders.csv` | Folder 樹（Datacenter / 類型 VM,HostAndCluster,Datastore,Network / 相對路徑） |
-| `vm-placement.csv` | 每台 VM/範本 在哪個 Folder（含 InstanceUuid、IsTemplate、InVApp、VmPathName、PowerState、VMHost、Cluster） |
+| `vm-placement.csv` | 每台 VM/範本 在哪個 Folder（含 InstanceUuid、IsTemplate、InVApp、VmPathName、PowerState、VMHost、Cluster、Lun） |
 | `tag-categories.csv` | Tag 分類（Cardinality、可套用的 EntityType） |
 | `tags.csv` | 標籤（分類 / 名稱 / 說明） |
 | `tag-assignments.csv` | 誰被貼了什麼標籤 |
